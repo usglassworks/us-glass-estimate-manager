@@ -462,8 +462,37 @@
     }
     .filter-chip.active { background: var(--primary); color: white; border-color: var(--primary); }
 
+    /* ===== HANDOFF BANNER ===== */
+    .handoff-banner {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      background: #fff7ed;
+      border: 1.5px solid #fed7aa;
+      border-radius: var(--radius);
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    .handoff-banner-icon { font-size: 22px; flex-shrink: 0; line-height: 1.2; }
+    .handoff-banner-body { flex: 1; min-width: 0; }
+    .handoff-banner-title { font-size: 14px; font-weight: 700; color: #9a3412; }
+    .handoff-banner-sub { font-size: 12px; color: #c2410c; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .handoff-banner-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+
+    /* ===== PENDING PDF ===== */
+    .pending-pdf-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .pending-pdf-row:last-child { border-bottom: none; }
+    .pending-pdf-name { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+
     @media (min-width: 480px) {
       .stats-grid { grid-template-columns: repeat(4, 1fr); }
+      .handoff-banner-actions { flex-direction: row; }
     }
   </style>
 </head>
@@ -486,6 +515,7 @@
 
   <!-- HOME PAGE -->
   <div class="page active" id="page-home">
+    <div id="handoff-notice"></div>
     <div id="home-login-notice"></div>
     <div class="stats-grid" id="stats-grid"></div>
     <div class="card" id="recent-sites-card">
@@ -749,6 +779,7 @@ const STATUS_COLORS = {
 };
 const DRIVE_API = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
+const HANDOFF_KEY = 'usGlassEstimateHandoff'; // 積算ツールとの受け渡しキー
 
 // ---- ステート ----
 let appData = loadData();
@@ -758,7 +789,8 @@ let tokenClient = null;
 let pendingAction = null; // ログイン後に実行するアクション
 let currentPage = 'home';
 let currentSiteId = null;
-let companyFilter = null; // sites ページのフィルター
+let companyFilter = null;      // sites ページのフィルター
+let pendingUploadIndex = null; // pendingPdfs内のアップロード対象インデックス
 
 // ====================================================================
 // データ管理
@@ -1091,6 +1123,7 @@ function navigateTo(page, param) {
 // ====================================================================
 
 function renderHome() {
+  checkHandoff();
   const stats = document.getElementById('stats-grid');
   const companies = appData.companies.length;
   const sites = appData.sites.length;
@@ -1320,6 +1353,8 @@ function renderSiteDetail() {
             <span class="amount-label">粗利率</span>
             <span class="amount-value ${fin.profit >= 0 ? 'amount-positive' : 'amount-negative'}">${fin.margin}%</span>
           </div>
+          ${site.estimateType ? `
+          <div class="amount-row"><span class="amount-label">見積種別</span><span class="amount-value">${esc(site.estimateType)}</span></div>` : ''}
         </div>
       </div>
     </div>
@@ -1343,10 +1378,40 @@ function renderSiteDetail() {
       <div class="card-body" style="padding-top:0;font-size:14px;">${esc(site.address)}</div>
     </div>` : ''}
 
+    <!-- 積算ツールから受け取った未アップロードPDF -->
+    ${(site.pendingPdfs || []).length > 0 ? `
+    <div class="card detail-section" style="border-color:#fed7aa;">
+      <div class="card-header" style="background:#fff7ed;">
+        <span class="card-title" style="color:#9a3412;">📥 未アップロードPDF（積算ツールから受取）</span>
+        <span class="badge badge-yellow">${site.pendingPdfs.length}件</span>
+      </div>
+      <div class="card-body" style="padding-top:0;">
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;line-height:1.5;">
+          積算ツールから受け取ったPDFです。ファイルを選択してGoogle Driveへアップロードしてください。
+        </p>
+        ${site.pendingPdfs.map((p, i) => `
+          <div class="pending-pdf-row">
+            <svg width="18" height="18" fill="none" stroke="#f59e0b" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z"/>
+              <polyline points="14 2 14 8 20 8"/>
+            </svg>
+            <span class="pending-pdf-name" title="${esc(p.name)}">${esc(p.name)}</span>
+            <button class="btn btn-primary btn-sm" onclick="startPdfUploadForPending('${site.id}', ${i})">
+              <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+              選択してアップロード
+            </button>
+            <button class="btn btn-secondary btn-sm btn-icon" onclick="dismissPendingPdf('${site.id}', ${i})" title="削除">
+              <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+        `).join('')}
+      </div>
+    </div>` : ''}
+
     <!-- PDF -->
     <div class="card detail-section">
       <div class="card-header">
-        <span class="card-title">見積PDF</span>
+        <span class="card-title">見積PDF（Drive保存済み）</span>
         <button class="btn btn-primary btn-sm" id="upload-btn" onclick="startPdfUpload('${site.id}')">
           <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
           PDFをアップロード
@@ -1509,9 +1574,11 @@ function saveSite() {
       status: document.getElementById('site-status').value,
       estimateAmount: parseAmount(document.getElementById('site-estimate').value),
       cost: parseAmount(document.getElementById('site-cost').value),
+      estimateType: '',
       address: document.getElementById('site-address').value.trim(),
       notes: document.getElementById('site-notes').value.trim(),
       pdfs: [],
+      pendingPdfs: [],
       driveFolderId: '',
       driveFolderLink: '',
       createdAt: now,
@@ -1597,6 +1664,13 @@ async function doUpload(siteId, file) {
       uploadedAt: new Date().toISOString(),
     });
     site.updatedAt = new Date().toISOString();
+    // pendingPdfsのアップロード済みエントリを削除
+    if (pendingUploadIndex !== null) {
+      if (site.pendingPdfs?.[pendingUploadIndex]) {
+        site.pendingPdfs.splice(pendingUploadIndex, 1);
+      }
+      pendingUploadIndex = null;
+    }
     saveData();
     showToast('PDFをGoogle Driveにアップロードしました！', 'success');
     renderSiteDetail();
@@ -1767,6 +1841,162 @@ function esc(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+// ====================================================================
+// 積算ツール連携（ハンドオフ）
+// ====================================================================
+
+// ホーム画面のバナー表示
+// 期待するlocalStorageフォーマット（積算ツール側が書き込む）:
+// {
+//   companyName: "山田建設株式会社",
+//   siteName: "新宿マンション工事",
+//   estimateAmount: 1500000,   // 円（整数）
+//   cost: 1000000,             // 円（整数）
+//   profit: 500000,            // 円（整数、省略可）
+//   estimateType: "ガラス工事", // 省略可
+//   pdfFileName: "見積書_新宿.pdf" // ファイル名のみ（本体なし）
+// }
+function checkHandoff() {
+  const el = document.getElementById('handoff-notice');
+  if (!el) return;
+  const raw = localStorage.getItem(HANDOFF_KEY);
+  if (!raw) { el.innerHTML = ''; return; }
+
+  let data;
+  try { data = JSON.parse(raw); } catch {
+    localStorage.removeItem(HANDOFF_KEY);
+    el.innerHTML = '';
+    return;
+  }
+
+  const companyText = esc(data.companyName || '（会社名なし）');
+  const siteText    = esc(data.siteName    || '（現場名なし）');
+  const amountText  = data.estimateAmount ? '・' + formatYen(data.estimateAmount) : '';
+  const typeText    = data.estimateType   ? '・' + esc(data.estimateType) : '';
+
+  el.innerHTML = `
+    <div class="handoff-banner">
+      <div class="handoff-banner-icon">📥</div>
+      <div class="handoff-banner-body">
+        <div class="handoff-banner-title">積算ツールから未登録見積があります</div>
+        <div class="handoff-banner-sub">${companyText} / ${siteText}${amountText}${typeText}</div>
+        ${data.pdfFileName ? `<div class="handoff-banner-sub" style="margin-top:2px;">PDF: ${esc(data.pdfFileName)}</div>` : ''}
+      </div>
+      <div class="handoff-banner-actions">
+        <button class="btn btn-primary btn-sm" onclick="importHandoff()">取り込む</button>
+        <button class="btn btn-secondary btn-sm" onclick="dismissHandoff()">無視</button>
+      </div>
+    </div>
+  `;
+}
+
+// 無視ボタン：handoffデータを削除してバナーを消す
+function dismissHandoff() {
+  localStorage.removeItem(HANDOFF_KEY);
+  const el = document.getElementById('handoff-notice');
+  if (el) el.innerHTML = '';
+  showToast('見積データを無視しました');
+}
+
+// 取り込みボタン：会社・現場を検索 or 新規作成してデータを保存
+function importHandoff() {
+  const raw = localStorage.getItem(HANDOFF_KEY);
+  if (!raw) return;
+
+  let data;
+  try { data = JSON.parse(raw); } catch {
+    localStorage.removeItem(HANDOFF_KEY);
+    showToast('データの読み込みに失敗しました', 'danger');
+    return;
+  }
+
+  const companyName = (data.companyName || '').trim();
+  const siteName    = (data.siteName    || '').trim();
+  if (!companyName || !siteName) {
+    showToast('会社名または現場名が含まれていません', 'danger');
+    localStorage.removeItem(HANDOFF_KEY);
+    return;
+  }
+
+  const now = new Date().toISOString();
+
+  // 会社を検索（完全一致）、なければ新規作成
+  let company = appData.companies.find(c => c.name === companyName);
+  const isNewCompany = !company;
+  if (!company) {
+    company = { id: generateId(), name: companyName, createdAt: now };
+    appData.companies.push(company);
+  }
+
+  // 現場を検索（同会社内で完全一致）、なければ新規作成
+  let site = appData.sites.find(s => s.companyId === company.id && s.name === siteName);
+  const isNewSite = !site;
+  if (!site) {
+    site = {
+      id: generateId(),
+      companyId: company.id,
+      name: siteName,
+      status: '見積中',
+      estimateAmount: 0,
+      cost: 0,
+      estimateType: '',
+      address: '',
+      notes: '',
+      pdfs: [],
+      pendingPdfs: [],
+      driveFolderId: '',
+      driveFolderLink: '',
+      createdAt: now,
+      updatedAt: now,
+    };
+    appData.sites.push(site);
+  } else {
+    if (!site.pendingPdfs) site.pendingPdfs = [];
+  }
+
+  // 見積データを上書き（既存現場でも積算ツールの値が最新）
+  if (data.estimateAmount != null) site.estimateAmount = parseInt(data.estimateAmount) || 0;
+  if (data.cost != null)           site.cost           = parseInt(data.cost)           || 0;
+  if (data.estimateType)           site.estimateType   = data.estimateType;
+  site.updatedAt = now;
+
+  // PDFファイル名を pendingPdfs に登録（本体なし・重複チェックあり）
+  if (data.pdfFileName) {
+    if (!site.pendingPdfs.find(p => p.name === data.pdfFileName)) {
+      site.pendingPdfs.push({ name: data.pdfFileName, receivedAt: now });
+    }
+  }
+
+  saveData();
+  localStorage.removeItem(HANDOFF_KEY);
+
+  const msg = isNewCompany
+    ? `会社「${companyName}」と現場「${siteName}」を新規作成しました`
+    : isNewSite
+    ? `既存会社に現場「${siteName}」を新規作成しました`
+    : `現場「${siteName}」の見積データを更新しました`;
+  showToast(msg, 'success');
+
+  navigateTo('site-detail', site.id);
+}
+
+// pendingPdfs専用アップロード起動（完了後に対象エントリを自動削除）
+function startPdfUploadForPending(siteId, pendingIndex) {
+  pendingUploadIndex = pendingIndex;
+  startPdfUpload(siteId);
+}
+
+// pendingPdfsから手動削除
+function dismissPendingPdf(siteId, index) {
+  const site = appData.sites.find(s => s.id === siteId);
+  if (!site?.pendingPdfs?.[index]) return;
+  const name = site.pendingPdfs[index].name;
+  site.pendingPdfs.splice(index, 1);
+  saveData();
+  renderSiteDetail();
+  showToast(`「${name}」を削除しました`);
 }
 
 // ====================================================================
