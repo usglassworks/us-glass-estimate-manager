@@ -320,6 +320,8 @@
     .pdf-info { flex: 1; min-width: 0; }
     .pdf-name { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .pdf-date { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+    .pdf-sub-info { font-size: 12px; color: var(--text-muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pdf-manual-badge { display: inline-block; font-size: 10px; font-weight: 600; background: #f0f9ff; color: #0369a1; border: 1px solid #bae6fd; border-radius: 4px; padding: 1px 5px; margin-left: 5px; vertical-align: middle; flex-shrink: 0; }
     .pdf-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
     /* ===== UPLOAD AREA ===== */
@@ -850,6 +852,44 @@
   </div>
 </div>
 
+<!-- Manual Drive Link Modal -->
+<div class="modal-overlay" id="modal-manual-link">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <h3 class="modal-title">Driveリンクを手動登録</h3>
+      <button class="modal-close" onclick="closeModal('modal-manual-link')">✕</button>
+    </div>
+    <p style="font-size:13px;color:var(--text-muted);line-height:1.6;margin-bottom:16px;">
+      Google Drive APIを使わず、Drive共有リンクを直接登録してPDF管理できます。
+    </p>
+    <div class="form-group">
+      <label class="form-label">PDF名 <span style="color:var(--danger)">*</span></label>
+      <input type="text" class="form-input" id="manual-pdf-name" placeholder="例：見積書_現場名_2024-01-15.pdf" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Drive共有リンク <span style="color:var(--danger)">*</span></label>
+      <input type="url" class="form-input" id="manual-drive-link" placeholder="https://drive.google.com/file/d/..." autocomplete="off" autocapitalize="off">
+    </div>
+    <div class="form-group">
+      <label class="form-label">見積種別</label>
+      <input type="text" class="form-input" id="manual-estimate-type" placeholder="例：新設・改修・補修など" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label class="form-label">金額（税込）</label>
+      <input type="text" inputmode="numeric" class="form-input" id="manual-amount" placeholder="0">
+    </div>
+    <div class="form-group">
+      <label class="form-label">メモ</label>
+      <textarea class="form-textarea" id="manual-notes" placeholder="備考・担当者など" rows="3"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('modal-manual-link')">キャンセル</button>
+      <button class="btn btn-primary" onclick="saveManualLink()">登録</button>
+    </div>
+  </div>
+</div>
+
 <!-- ===== TOAST ===== -->
 <div id="toast-container"></div>
 
@@ -889,6 +929,7 @@ let currentSiteId = null;
 let companyFilter = null;      // sites ページのフィルター
 let pendingUploadIndex = null; // pendingPdfs内のアップロード対象インデックス
 let handoffItemsBuffer = [];   // 補完モーダル用一時バッファ
+let manualLinkSiteId = null;   // 手動Driveリンク登録対象
 let summaryMode  = 'monthly';               // 'monthly' | 'yearly'
 let summaryYear  = new Date().getFullYear();
 let summaryMonth = new Date().getMonth() + 1; // 1-12
@@ -1393,14 +1434,20 @@ function renderSiteDetail() {
 
   const pdfsHtml = (site.pdfs || []).length === 0
     ? '<div style="padding:16px;text-align:center;color:var(--text-muted);font-size:14px;">PDFがありません</div>'
-    : (site.pdfs || []).map((p, i) => `
+    : (site.pdfs || []).map((p, i) => {
+        const subParts = [];
+        if (p.estimateType) subParts.push(`種別: ${esc(p.estimateType)}`);
+        if (p.amount)       subParts.push(`金額: ${formatYen(p.amount)}`);
+        if (p.notes)        subParts.push(esc(p.notes));
+        return `
       <div class="pdf-item">
-        <div class="pdf-icon-wrap">
-          <svg width="20" height="20" fill="none" stroke="#dc2626" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+        <div class="pdf-icon-wrap" style="${p.isManual ? 'background:#e0f2fe;' : ''}">
+          <svg width="20" height="20" fill="none" stroke="${p.isManual ? '#0369a1' : '#dc2626'}" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
         </div>
         <div class="pdf-info">
-          <div class="pdf-name">${esc(p.name)}</div>
+          <div class="pdf-name" style="white-space:normal;word-break:break-all;">${esc(p.name)}${p.isManual ? '<span class="pdf-manual-badge">手動登録</span>' : ''}</div>
           <div class="pdf-date">${formatDate(p.uploadedAt)}</div>
+          ${subParts.length ? `<div class="pdf-sub-info">${subParts.join(' ｜ ')}</div>` : ''}
         </div>
         <div class="pdf-actions">
           ${p.webViewLink ? `<a href="${p.webViewLink}" target="_blank" rel="noopener" class="btn btn-outline btn-sm">開く</a>` : ''}
@@ -1408,8 +1455,8 @@ function renderSiteDetail() {
             <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
           </button>
         </div>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
 
   const driveLinkHtml = site.driveFolderLink
     ? `<div class="drive-link-row">
@@ -1522,11 +1569,17 @@ function renderSiteDetail() {
     <!-- PDF -->
     <div class="card detail-section">
       <div class="card-header">
-        <span class="card-title">見積PDF（Drive保存済み）</span>
-        <button class="btn btn-primary btn-sm" id="upload-btn" onclick="startPdfUpload('${site.id}')">
-          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
-          PDFをアップロード
-        </button>
+        <span class="card-title">見積PDF</span>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn btn-outline btn-sm" onclick="openManualLinkModal('${site.id}')">
+            <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+            Driveリンクを手動登録
+          </button>
+          <button class="btn btn-primary btn-sm" id="upload-btn" onclick="startPdfUpload('${site.id}')">
+            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+            PDFをアップロード
+          </button>
+        </div>
       </div>
       <div id="upload-progress-area"></div>
       <div id="pdf-list">${pdfsHtml}</div>
@@ -2233,6 +2286,53 @@ function executeImport(items) {
   if (lastSite) {
     navigateTo('site-detail', lastSite.id);
   }
+}
+
+// ====================================================================
+// 手動 Drive リンク登録
+// ====================================================================
+
+function openManualLinkModal(siteId) {
+  manualLinkSiteId = siteId;
+  document.getElementById('manual-pdf-name').value = '';
+  document.getElementById('manual-drive-link').value = '';
+  document.getElementById('manual-estimate-type').value = '';
+  document.getElementById('manual-amount').value = '';
+  document.getElementById('manual-notes').value = '';
+  openModal('modal-manual-link');
+}
+
+function saveManualLink() {
+  const name = document.getElementById('manual-pdf-name').value.trim();
+  const link = document.getElementById('manual-drive-link').value.trim();
+  if (!name) { showToast('PDF名を入力してください', 'warning'); return; }
+  if (!link)  { showToast('Drive共有リンクを入力してください', 'warning'); return; }
+
+  const site = appData.sites.find(s => s.id === manualLinkSiteId);
+  if (!site) return;
+  if (!site.pdfs) site.pdfs = [];
+
+  const entry = {
+    id: generateId(),
+    name,
+    fileId: null,
+    webViewLink: link,
+    uploadedAt: new Date().toISOString(),
+    isManual: true,
+  };
+  const estimateType = document.getElementById('manual-estimate-type').value.trim();
+  const amountRaw    = document.getElementById('manual-amount').value.replace(/[^0-9]/g, '');
+  const notes        = document.getElementById('manual-notes').value.trim();
+  if (estimateType) entry.estimateType = estimateType;
+  if (amountRaw)    entry.amount = parseInt(amountRaw) || 0;
+  if (notes)        entry.notes  = notes;
+
+  site.pdfs.unshift(entry);
+  site.updatedAt = new Date().toISOString();
+  saveData();
+  closeModal('modal-manual-link');
+  showToast('Driveリンクを登録しました', 'success');
+  renderSiteDetail();
 }
 
 // pendingPdfs専用アップロード起動（完了後に対象エントリを自動削除）
