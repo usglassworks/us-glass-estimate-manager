@@ -490,6 +490,58 @@
     .pending-pdf-row:last-child { border-bottom: none; }
     .pending-pdf-name { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 
+    /* ===== SUMMARY PAGE ===== */
+    .summary-tabs { display: flex; margin-bottom: 16px; border: 1.5px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    .summary-tab { flex: 1; padding: 10px; font-size: 14px; font-weight: 600; text-align: center; cursor: pointer; background: white; color: var(--text-muted); border: none; }
+    .summary-tab.active { background: var(--primary); color: white; }
+
+    .year-nav { display: flex; align-items: center; justify-content: center; gap: 20px; margin-bottom: 14px; }
+    .year-nav-btn { background: white; border: 1.5px solid var(--border); border-radius: 8px; width: 36px; height: 36px; font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text); }
+    .year-nav-label { font-size: 20px; font-weight: 700; color: var(--text); min-width: 90px; text-align: center; }
+
+    .summary-status-card { background: white; border-radius: var(--radius); border: 1.5px solid var(--border); margin-bottom: 12px; overflow: hidden; }
+    .summary-status-header { padding: 11px 16px; display: flex; align-items: center; justify-content: space-between; }
+    .summary-status-title { font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+    .summary-status-count { font-size: 13px; color: var(--text-muted); }
+    .summary-status-body { padding: 4px 16px 14px; }
+    .summary-srow { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+    .summary-srow:last-child { border-bottom: none; }
+    .summary-srow-label { color: var(--text-muted); }
+    .summary-srow-value { font-weight: 500; font-feature-settings: "tnum"; }
+
+    /* ステータス別カード色 */
+    .sh-見積中 { background: #eff6ff; border-bottom: 1px solid #bfdbfe; }
+    .sh-受注   { background: #f0fdf4; border-bottom: 1px solid #bbf7d0; }
+    .sh-施工中 { background: #fffbeb; border-bottom: 1px solid #fde68a; }
+    .sh-完了   { background: #f9fafb; border-bottom: 1px solid #e5e7eb; }
+    .sh-失注   { background: #fff1f2; border-bottom: 1px solid #fecdd3; }
+    .sc-見積中 { border-color: #bfdbfe; }
+    .sc-受注   { border-color: #bbf7d0; }
+    .sc-施工中 { border-color: #fde68a; }
+    .sc-完了   { border-color: #e5e7eb; }
+    .sc-失注   { border-color: #fecdd3; }
+
+    .summary-total-card { background: var(--primary); color: white; border-radius: var(--radius); padding: 16px; margin-top: 4px; }
+    .summary-total-title { font-size: 13px; font-weight: 600; opacity: 0.85; margin-bottom: 10px; letter-spacing: 0.3px; }
+    .summary-total-row { display: flex; justify-content: space-between; padding: 5px 0; font-size: 14px; }
+    .summary-total-row.main { font-size: 17px; font-weight: 700; border-top: 1px solid rgba(255,255,255,0.3); margin-top: 6px; padding-top: 10px; }
+
+    .summary-year-row { display: flex; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border); cursor: pointer; gap: 8px; }
+    .summary-year-row:last-child { border-bottom: none; }
+    .summary-year-row:active { background: var(--bg); }
+    .summary-year-label { font-size: 14px; font-weight: 600; color: var(--text-muted); width: 36px; flex-shrink: 0; }
+    .summary-year-bar-wrap { flex: 1; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+    .summary-year-bar { height: 100%; background: var(--primary); border-radius: 3px; transition: width 0.4s; }
+    .summary-year-amount { font-size: 14px; font-weight: 500; text-align: right; min-width: 90px; font-feature-settings: "tnum"; }
+    .summary-year-count { font-size: 12px; color: var(--text-muted); width: 30px; text-align: right; flex-shrink: 0; }
+
+    /* 税バッジ（ホーム） */
+    .tax-badge { display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 10px; background: var(--primary); color: white; vertical-align: middle; margin-left: 4px; cursor: pointer; }
+    .tax-badge.excl { background: var(--text-muted); }
+
+    /* 税自動計算表示 */
+    .tax-hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; min-height: 16px; }
+
     @media (min-width: 480px) {
       .stats-grid { grid-template-columns: repeat(4, 1fr); }
       .handoff-banner-actions { flex-direction: row; }
@@ -536,6 +588,14 @@
         </p>
       </div>
     </div>
+  </div>
+
+  <!-- SUMMARY PAGE -->
+  <div class="page" id="page-summary">
+    <div class="section-header" style="margin-bottom:14px;">
+      <h2 class="section-title">集計</h2>
+    </div>
+    <div id="summary-content"></div>
   </div>
 
   <!-- COMPANIES PAGE -->
@@ -643,6 +703,10 @@
     <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
     <span>現場</span>
   </button>
+  <button class="nav-item" id="nav-summary" onclick="navigateTo('summary')">
+    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+    <span>集計</span>
+  </button>
   <button class="nav-item" id="nav-settings" onclick="navigateTo('settings')">
     <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
     <span>設定</span>
@@ -703,6 +767,10 @@
       <input type="text" class="form-input" id="site-name" placeholder="例：新宿タワーマンション新築工事" autocomplete="off">
     </div>
     <div class="form-group">
+      <label class="form-label">見積日</label>
+      <input type="date" class="form-input" id="site-estimate-date">
+    </div>
+    <div class="form-group">
       <label class="form-label">ステータス</label>
       <select class="form-select" id="site-status">
         <option value="見積中">見積中</option>
@@ -714,13 +782,22 @@
     </div>
     <div class="form-row">
       <div class="form-group">
-        <label class="form-label">見積金額（円）</label>
-        <input type="text" inputmode="numeric" class="form-input" id="site-estimate" placeholder="0">
+        <label class="form-label">税込見積金額（円）</label>
+        <input type="text" inputmode="numeric" class="form-input" id="site-estimate" placeholder="0" oninput="updateTaxHint()">
       </div>
       <div class="form-group">
-        <label class="form-label">原価（円）</label>
-        <input type="text" inputmode="numeric" class="form-input" id="site-cost" placeholder="0">
+        <label class="form-label">消費税率</label>
+        <select class="form-select" id="site-tax-rate" onchange="updateTaxHint()">
+          <option value="10">10%</option>
+          <option value="8">8%（軽減）</option>
+          <option value="0">0%（非課税）</option>
+        </select>
       </div>
+    </div>
+    <div class="tax-hint" id="tax-hint"></div>
+    <div class="form-group" style="margin-top:10px;">
+      <label class="form-label">原価（円）</label>
+      <input type="text" inputmode="numeric" class="form-input" id="site-cost" placeholder="0">
     </div>
     <div class="form-group">
       <label class="form-label">現場住所</label>
@@ -812,6 +889,10 @@ let currentSiteId = null;
 let companyFilter = null;      // sites ページのフィルター
 let pendingUploadIndex = null; // pendingPdfs内のアップロード対象インデックス
 let handoffItemsBuffer = [];   // 補完モーダル用一時バッファ
+let summaryMode  = 'monthly';               // 'monthly' | 'yearly'
+let summaryYear  = new Date().getFullYear();
+let summaryMonth = new Date().getMonth() + 1; // 1-12
+let homeTaxMode  = 'included';              // 'included' | 'excluded'
 
 // ====================================================================
 // データ管理
@@ -864,11 +945,13 @@ function getStatusBadge(status) {
 }
 
 function calcFinancials(site) {
-  const estimate = parseInt(site.estimateAmount) || 0;
-  const cost = parseInt(site.cost) || 0;
-  const profit = estimate - cost;
-  const margin = estimate > 0 ? (profit / estimate * 100).toFixed(1) : '0.0';
-  return { estimate, cost, profit, margin };
+  const included = getSiteTaxIncluded(site);
+  const excluded = getSiteTaxExcluded(site);
+  const taxAmt   = included - excluded;
+  const cost     = parseInt(site.cost) || 0;
+  const profit   = included - cost;
+  const margin   = included > 0 ? (profit / included * 100).toFixed(1) : '0.0';
+  return { estimate: included, included, excluded, taxAmt, cost, profit, margin };
 }
 
 // ====================================================================
@@ -1130,6 +1213,7 @@ function navigateTo(page, param) {
   // ページ内容をレンダリング
   switch (page) {
     case 'home':      renderHome(); break;
+    case 'summary':   renderSummary(); break;
     case 'companies': renderCompanies(); break;
     case 'sites':     renderSites(); break;
     case 'site-detail': renderSiteDetail(); break;
@@ -1149,7 +1233,9 @@ function renderHome() {
   const companies = appData.companies.length;
   const sites = appData.sites.length;
   const won = appData.sites.filter(s => s.status === '受注' || s.status === '施工中' || s.status === '完了').length;
-  const totalEst = appData.sites.reduce((a, s) => a + (parseInt(s.estimateAmount) || 0), 0);
+  const totalIncluded = appData.sites.reduce((a, s) => a + getSiteTaxIncluded(s), 0);
+  const totalExcluded = appData.sites.reduce((a, s) => a + getSiteTaxExcluded(s), 0);
+  const totalEst = homeTaxMode === 'included' ? totalIncluded : totalExcluded;
 
   stats.innerHTML = `
     <div class="stat-card">
@@ -1164,9 +1250,9 @@ function renderHome() {
       <div class="stat-value">${won}</div>
       <div class="stat-label">受注・施工・完了</div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" onclick="toggleHomeTaxMode()" style="cursor:pointer;">
       <div class="stat-value" style="font-size:16px;">¥${(totalEst/10000).toLocaleString('ja-JP',{maximumFractionDigits:0})}万</div>
-      <div class="stat-label">見積合計</div>
+      <div class="stat-label">見積合計 <span class="tax-badge ${homeTaxMode === 'excluded' ? 'excl' : ''}">${homeTaxMode === 'included' ? '税込' : '税抜'}</span></div>
     </div>
   `;
 
@@ -1364,10 +1450,12 @@ function renderSiteDetail() {
       <div class="card-header"><span class="card-title">見積・収支</span></div>
       <div class="card-body" style="padding-top:0;">
         <div class="amount-table">
-          <div class="amount-row"><span class="amount-label">見積金額</span><span class="amount-value">${formatYen(fin.estimate)}</span></div>
+          <div class="amount-row"><span class="amount-label">税込見積金額</span><span class="amount-value">${formatYen(fin.included)}</span></div>
+          <div class="amount-row"><span class="amount-label">税抜見積金額</span><span class="amount-value">${formatYen(fin.excluded)}</span></div>
+          <div class="amount-row"><span class="amount-label">消費税（${site.taxRate ?? 10}%）</span><span class="amount-value">${formatYen(fin.taxAmt)}</span></div>
           <div class="amount-row"><span class="amount-label">原価</span><span class="amount-value">${formatYen(fin.cost)}</span></div>
           <div class="amount-row">
-            <span class="amount-label">粗利</span>
+            <span class="amount-label">粗利（税込ベース）</span>
             <span class="amount-value ${fin.profit >= 0 ? 'amount-positive' : 'amount-negative'}">${formatYen(fin.profit)}</span>
           </div>
           <div class="amount-row">
@@ -1376,6 +1464,8 @@ function renderSiteDetail() {
           </div>
           ${site.estimateType ? `
           <div class="amount-row"><span class="amount-label">見積種別</span><span class="amount-value">${esc(site.estimateType)}</span></div>` : ''}
+          ${site.estimateDate ? `
+          <div class="amount-row"><span class="amount-label">見積日</span><span class="amount-value">${esc(site.estimateDate)}</span></div>` : ''}
         </div>
       </div>
     </div>
@@ -1547,21 +1637,27 @@ function openSiteModal(editId) {
     if (s) {
       sel.value = s.companyId || '';
       document.getElementById('site-name').value = s.name || '';
+      document.getElementById('site-estimate-date').value = s.estimateDate || '';
       document.getElementById('site-status').value = s.status || '見積中';
-      document.getElementById('site-estimate').value = s.estimateAmount || '';
+      document.getElementById('site-estimate').value = getSiteTaxIncluded(s) || '';
+      document.getElementById('site-tax-rate').value = String(s.taxRate ?? 10);
       document.getElementById('site-cost').value = s.cost || '';
       document.getElementById('site-address').value = s.address || '';
       document.getElementById('site-notes').value = s.notes || '';
     }
   } else {
+    const today = new Date().toISOString().slice(0, 10);
     sel.value = companyFilter || '';
     document.getElementById('site-name').value = '';
+    document.getElementById('site-estimate-date').value = today;
     document.getElementById('site-status').value = '見積中';
     document.getElementById('site-estimate').value = '';
+    document.getElementById('site-tax-rate').value = '10';
     document.getElementById('site-cost').value = '';
     document.getElementById('site-address').value = '';
     document.getElementById('site-notes').value = '';
   }
+  updateTaxHint();
   openModal('modal-site');
 }
 
@@ -1574,13 +1670,23 @@ function saveSite() {
   const editId = document.getElementById('site-edit-id').value;
   const now = new Date().toISOString();
 
+  const taxIncluded = parseAmount(document.getElementById('site-estimate').value);
+  const taxRate     = parseInt(document.getElementById('site-tax-rate').value) || 10;
+  const taxFields   = calcTaxFields(taxIncluded, taxRate);
+  const estimateDate = document.getElementById('site-estimate-date').value;
+
   if (editId) {
     const s = appData.sites.find(x => x.id === editId);
     if (s) {
       s.companyId = companyId;
       s.name = name;
+      s.estimateDate = estimateDate;
       s.status = document.getElementById('site-status').value;
-      s.estimateAmount = parseAmount(document.getElementById('site-estimate').value);
+      s.estimateAmount           = taxFields.included;
+      s.estimateAmountTaxIncluded = taxFields.included;
+      s.estimateAmountTaxExcluded = taxFields.excluded;
+      s.taxAmount = taxFields.taxAmt;
+      s.taxRate   = taxRate;
       s.cost = parseAmount(document.getElementById('site-cost').value);
       s.address = document.getElementById('site-address').value.trim();
       s.notes = document.getElementById('site-notes').value.trim();
@@ -1592,8 +1698,13 @@ function saveSite() {
       id: generateId(),
       companyId,
       name,
+      estimateDate,
       status: document.getElementById('site-status').value,
-      estimateAmount: parseAmount(document.getElementById('site-estimate').value),
+      estimateAmount:            taxFields.included,
+      estimateAmountTaxIncluded: taxFields.included,
+      estimateAmountTaxExcluded: taxFields.excluded,
+      taxAmount: taxFields.taxAmt,
+      taxRate,
       cost: parseAmount(document.getElementById('site-cost').value),
       estimateType: '',
       address: document.getElementById('site-address').value.trim(),
@@ -2080,10 +2191,19 @@ function executeImport(items) {
       updateCount++;
     }
 
-    // 見積データを上書き（積算ツールの値が常に最新）
-    if (data.estimateAmount != null) site.estimateAmount = parseInt(data.estimateAmount) || 0;
-    if (data.cost != null)           site.cost           = parseInt(data.cost)           || 0;
-    if (data.estimateType)           site.estimateType   = data.estimateType;
+    // 見積データを上書き（積算ツールのestimateAmountは税込として扱う）
+    if (data.estimateAmount != null) {
+      const taxRate = data.taxRate || site.taxRate || 10;
+      const tf = calcTaxFields(parseInt(data.estimateAmount) || 0, taxRate);
+      site.estimateAmount            = tf.included;
+      site.estimateAmountTaxIncluded = tf.included;
+      site.estimateAmountTaxExcluded = tf.excluded;
+      site.taxAmount = tf.taxAmt;
+      site.taxRate   = taxRate;
+    }
+    if (data.cost != null) site.cost = parseInt(data.cost) || 0;
+    if (data.estimateType) site.estimateType = data.estimateType;
+    if (data.estimateDate) site.estimateDate = data.estimateDate;
     site.updatedAt = now;
 
     // PDFファイル名を pendingPdfs に登録（本体なし・重複チェックあり）
@@ -2130,6 +2250,196 @@ function dismissPendingPdf(siteId, index) {
   saveData();
   renderSiteDetail();
   showToast(`「${name}」を削除しました`);
+}
+
+// ====================================================================
+// 税計算ユーティリティ
+// ====================================================================
+
+// 税込金額 → 税抜・消費税を計算（1円単位四捨五入）
+function calcTaxFields(taxIncluded, taxRate = 10) {
+  const included = parseInt(taxIncluded) || 0;
+  const rate = Number(taxRate) || 0;
+  const excluded = rate > 0 ? Math.round(included / (1 + rate / 100)) : included;
+  const taxAmt   = included - excluded;
+  return { included, excluded, taxAmt, taxRate: rate };
+}
+
+// 現場の税込金額（新フィールド優先、なければ estimateAmount を税込とみなす）
+function getSiteTaxIncluded(site) {
+  return parseInt(site.estimateAmountTaxIncluded ?? site.estimateAmount) || 0;
+}
+
+// 現場の税抜金額（新フィールド優先、なければ税率から逆算）
+function getSiteTaxExcluded(site) {
+  if (site.estimateAmountTaxExcluded != null) return parseInt(site.estimateAmountTaxExcluded) || 0;
+  const inc  = getSiteTaxIncluded(site);
+  const rate = Number(site.taxRate ?? 10);
+  return rate > 0 ? Math.round(inc / (1 + rate / 100)) : inc;
+}
+
+// 集計に使う日付（見積日 → createdAt の順）
+function getSiteDate(site) {
+  if (site.estimateDate) return site.estimateDate;
+  return (site.createdAt || new Date().toISOString()).slice(0, 10);
+}
+
+// ホーム 税込/税抜 トグル
+function toggleHomeTaxMode() {
+  homeTaxMode = homeTaxMode === 'included' ? 'excluded' : 'included';
+  renderHome();
+}
+
+// フォーム内の税自動計算ヒント表示
+function updateTaxHint() {
+  const amount  = parseAmount(document.getElementById('site-estimate')?.value || '');
+  const rate    = parseInt(document.getElementById('site-tax-rate')?.value || '10');
+  const hintEl  = document.getElementById('tax-hint');
+  if (!hintEl) return;
+  if (amount > 0) {
+    const tf = calcTaxFields(amount, rate);
+    hintEl.textContent = `税抜 ${formatYen(tf.excluded)}　消費税 ${formatYen(tf.taxAmt)}`;
+  } else {
+    hintEl.textContent = '';
+  }
+}
+
+// ====================================================================
+// 集計ページ
+// ====================================================================
+
+function renderSummary() {
+  const el = document.getElementById('summary-content');
+  if (!el) return;
+
+  const tabsHtml = `
+    <div class="summary-tabs">
+      <button class="summary-tab ${summaryMode === 'monthly' ? 'active' : ''}" onclick="setSummaryMode('monthly')">月別</button>
+      <button class="summary-tab ${summaryMode === 'yearly'  ? 'active' : ''}" onclick="setSummaryMode('yearly')">年間</button>
+    </div>`;
+
+  const yearNavHtml = `
+    <div class="year-nav">
+      <button class="year-nav-btn" onclick="changeSummaryYear(-1)">‹</button>
+      <span class="year-nav-label">${summaryYear}年</span>
+      <button class="year-nav-btn" onclick="changeSummaryYear(1)">›</button>
+    </div>`;
+
+  let bodyHtml = '';
+  if (summaryMode === 'monthly') {
+    const monthChips = Array.from({length: 12}, (_, i) => i + 1).map(m =>
+      `<div class="filter-chip ${summaryMonth === m ? 'active' : ''}" onclick="setSummaryMonth(${m})">${m}月</div>`
+    ).join('');
+    bodyHtml = `
+      <div class="filter-bar">${monthChips}</div>
+      <h3 style="font-size:16px;font-weight:700;margin-bottom:14px;">${summaryYear}年${summaryMonth}月 集計</h3>
+      ${buildMonthlySummaryHtml(summaryYear, summaryMonth)}`;
+  } else {
+    bodyHtml = `
+      <h3 style="font-size:16px;font-weight:700;margin-bottom:14px;">${summaryYear}年 年間集計</h3>
+      <div class="card" style="overflow:hidden;margin-bottom:12px;">${buildYearlySummaryHtml(summaryYear)}</div>`;
+  }
+
+  el.innerHTML = tabsHtml + yearNavHtml + bodyHtml;
+}
+
+function setSummaryMode(mode) { summaryMode = mode; renderSummary(); }
+function setSummaryMonth(m)   { summaryMonth = m;   renderSummary(); }
+function changeSummaryYear(d) { summaryYear += d;   renderSummary(); }
+
+// 対象年月の現場を返す
+function getSitesForMonth(year, month) {
+  return appData.sites.filter(s => {
+    const d = new Date(getSiteDate(s));
+    return d.getFullYear() === year && d.getMonth() + 1 === month;
+  });
+}
+
+// 月別集計HTML生成
+function buildMonthlySummaryHtml(year, month) {
+  const sites = getSitesForMonth(year, month);
+  if (!sites.length) return `<div class="empty-state" style="padding:32px 0;"><p>この月の現場データがありません</p></div>`;
+
+  const statuses = ['見積中', '受注', '施工中', '完了', '失注'];
+  let html = '';
+  let grandIncluded = 0, grandExcluded = 0, grandTaxAmt = 0, grandCount = 0;
+
+  for (const status of statuses) {
+    const group = sites.filter(s => s.status === status);
+    if (!group.length) continue;
+    const inc  = group.reduce((a, s) => a + getSiteTaxIncluded(s), 0);
+    const excl = group.reduce((a, s) => a + getSiteTaxExcluded(s), 0);
+    const tax  = inc - excl;
+    grandIncluded += inc; grandExcluded += excl; grandTaxAmt += tax; grandCount += group.length;
+
+    html += `
+      <div class="summary-status-card sc-${status}">
+        <div class="summary-status-header sh-${status}">
+          <span class="summary-status-title">${getStatusBadge(status)} ${status}</span>
+          <span class="summary-status-count">${group.length}件</span>
+        </div>
+        <div class="summary-status-body">
+          <div class="summary-srow"><span class="summary-srow-label">税抜合計</span><span class="summary-srow-value">${formatYen(excl)}</span></div>
+          <div class="summary-srow"><span class="summary-srow-label">消費税</span><span class="summary-srow-value">${formatYen(tax)}</span></div>
+          <div class="summary-srow"><span class="summary-srow-label">税込合計</span><span class="summary-srow-value">${formatYen(inc)}</span></div>
+        </div>
+      </div>`;
+  }
+
+  html += `
+    <div class="summary-total-card">
+      <div class="summary-total-title">月合計（${grandCount}件）</div>
+      <div class="summary-total-row"><span>税抜合計</span><span>${formatYen(grandExcluded)}</span></div>
+      <div class="summary-total-row"><span>消費税</span><span>${formatYen(grandTaxAmt)}</span></div>
+      <div class="summary-total-row main"><span>税込合計</span><span>${formatYen(grandIncluded)}</span></div>
+    </div>`;
+
+  return html;
+}
+
+// 年間集計HTML生成
+function buildYearlySummaryHtml(year) {
+  const yearSites = appData.sites.filter(s => new Date(getSiteDate(s)).getFullYear() === year);
+  const maxMonthly = Math.max(...Array.from({length: 12}, (_, i) =>
+    yearSites.filter(s => new Date(getSiteDate(s)).getMonth() + 1 === i + 1)
+             .reduce((a, s) => a + getSiteTaxIncluded(s), 0)
+  ), 1);
+
+  let html = '';
+  let yearTotal = 0, yearCount = 0;
+
+  for (let m = 1; m <= 12; m++) {
+    const group = yearSites.filter(s => new Date(getSiteDate(s)).getMonth() + 1 === m);
+    const inc   = group.reduce((a, s) => a + getSiteTaxIncluded(s), 0);
+    yearTotal += inc; yearCount += group.length;
+    const barPct = maxMonthly > 0 ? Math.round(inc / maxMonthly * 100) : 0;
+
+    html += `
+      <div class="summary-year-row" onclick="setSummaryModeMonth(${m})">
+        <span class="summary-year-label">${m}月</span>
+        <div class="summary-year-bar-wrap">
+          <div class="summary-year-bar" style="width:${barPct}%"></div>
+        </div>
+        <span class="summary-year-amount">${inc > 0 ? formatYen(inc) : '—'}</span>
+        <span class="summary-year-count">${group.length > 0 ? group.length + '件' : ''}</span>
+      </div>`;
+  }
+
+  html += `</div>
+    <div class="summary-total-card" style="border-radius:0;">
+      <div class="summary-total-title">年間合計（${yearCount}件）</div>
+      <div class="summary-total-row main"><span>税込合計</span><span>${formatYen(yearTotal)}</span></div>
+    </div>
+    <div style="display:none">`;  // close trick for nested div
+
+  return html;
+}
+
+// 年間ビューの月をクリックで月別ビューへ切り替え
+function setSummaryModeMonth(m) {
+  summaryMode  = 'monthly';
+  summaryMonth = m;
+  renderSummary();
 }
 
 // ====================================================================
