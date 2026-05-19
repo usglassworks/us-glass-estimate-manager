@@ -523,6 +523,29 @@
     .sc-完了   { border-color: #e5e7eb; }
     .sc-失注   { border-color: #fecdd3; }
 
+    /* ===== HOME MONTH SUMMARY ===== */
+    .home-mnav-btn { background:white; border:1.5px solid var(--border); border-radius:7px; width:30px; height:30px; font-size:16px; cursor:pointer; display:flex; align-items:center; justify-content:center; color:var(--text); flex-shrink:0; padding:0; }
+    .home-status-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:10px; }
+    .home-sc { background:white; border-radius:var(--radius); border:1.5px solid var(--border); overflow:hidden; }
+    .home-sc-head { padding:7px 10px 5px; border-bottom:1px solid var(--border); font-size:13px; font-weight:700; }
+    .home-sc-body { padding:6px 10px 8px; }
+    .home-sc-row { display:flex; justify-content:space-between; align-items:baseline; padding:2px 0; font-size:12px; }
+    .home-sc-lbl { color:var(--text-muted); }
+    .home-sc-val { font-weight:600; font-size:12px; font-feature-settings:"tnum"; }
+    .home-sc-cnt { font-size:11px; color:var(--text-muted); text-align:right; margin-top:3px; }
+    .home-total-wrap { background:var(--primary-light); border:1.5px solid var(--primary); border-radius:var(--radius); padding:10px 14px; }
+    .home-total-row { display:flex; justify-content:space-between; align-items:baseline; padding:4px 0; font-size:13px; }
+    .home-total-lbl { color:var(--text-muted); }
+    .home-total-val { font-weight:700; font-feature-settings:"tnum"; }
+
+    /* ===== PDF UPLOAD (label-based for iPhone Safari) ===== */
+    .pdf-upload-wrap { padding:12px 16px; border-top:1px solid var(--border); }
+    .pdf-file-label { display:inline-flex; align-items:center; gap:6px; background:var(--primary); color:white; border-radius:8px; padding:8px 14px; font-size:13px; font-weight:600; cursor:pointer; user-select:none; -webkit-user-select:none; }
+    .pdf-file-label:active { opacity:0.82; }
+    .pdf-selected-row { display:flex; align-items:center; gap:8px; margin-top:10px; flex-wrap:wrap; }
+    .pdf-selected-name { flex:1; font-size:13px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+    .pdf-upload-error { margin-top:10px; background:#fee2e2; border:1px solid #fecaca; border-radius:8px; padding:10px 14px; font-size:13px; color:#991b1b; line-height:1.6; }
+
     .summary-total-card { background: var(--primary); color: white; border-radius: var(--radius); padding: 16px; margin-top: 4px; }
     .summary-total-title { font-size: 13px; font-weight: 600; opacity: 0.85; margin-bottom: 10px; letter-spacing: 0.3px; }
     .summary-total-row { display: flex; justify-content: space-between; padding: 5px 0; font-size: 14px; }
@@ -572,6 +595,7 @@
     <div id="handoff-notice"></div>
     <div id="home-login-notice"></div>
     <div class="stats-grid" id="stats-grid"></div>
+    <div id="home-month-summary"></div>
     <div class="card" id="recent-sites-card">
       <div class="card-header">
         <span class="card-title">最近の現場</span>
@@ -930,6 +954,10 @@ let companyFilter = null;      // sites ページのフィルター
 let pendingUploadIndex = null; // pendingPdfs内のアップロード対象インデックス
 let handoffItemsBuffer = [];   // 補完モーダル用一時バッファ
 let manualLinkSiteId = null;   // 手動Driveリンク登録対象
+let homeYear  = new Date().getFullYear();
+let homeMonth = new Date().getMonth() + 1; // 1-12
+let selectedPdfFile   = null;  // ラベル式ファイル選択で選んだファイル
+let selectedPdfSiteId = null;
 let summaryMode  = 'monthly';               // 'monthly' | 'yearly'
 let summaryYear  = new Date().getFullYear();
 let summaryMonth = new Date().getMonth() + 1; // 1-12
@@ -1161,21 +1189,21 @@ async function ensureFolderHierarchy(siteId, onProgress) {
   const company = appData.companies.find(c => c.id === site.companyId);
   if (!site || !company) throw new Error('現場または会社が見つかりません');
 
-  onProgress?.('ルートフォルダを確認中...');
+  onProgress?.('ルートフォルダ確認中...', 15);
   if (!appData.settings.rootFolderId) {
     const root = await getOrCreateFolder('US_GLASS_見積管理', 'root');
     appData.settings.rootFolderId = root.id;
     saveData();
   }
 
-  onProgress?.(`${company.name} フォルダを確認中...`);
+  onProgress?.(`建築会社フォルダ確認中（${company.name}）...`, 35);
   if (!company.driveFolderId) {
     const cf = await getOrCreateFolder(company.name, appData.settings.rootFolderId);
     company.driveFolderId = cf.id;
     saveData();
   }
 
-  onProgress?.(`${site.name} フォルダを確認中...`);
+  onProgress?.(`現場フォルダ確認中（${site.name}）...`, 55);
   if (!site.driveFolderId) {
     const sf = await getOrCreateFolder(site.name, company.driveFolderId);
     site.driveFolderId = sf.id;
@@ -1188,7 +1216,7 @@ async function ensureFolderHierarchy(siteId, onProgress) {
 
 // PDFをDriveにアップロード（multipart）
 async function uploadFileToDrive(file, folderId, fileName, onProgress) {
-  onProgress?.('アップロード中...');
+  onProgress?.('PDFアップロード中...', 70);
 
   const metadata = { name: fileName, parents: [folderId] };
   const form = new FormData();
@@ -1328,6 +1356,76 @@ function renderHome() {
   }
 
   document.getElementById('home-guide-card').style.display = appData.sites.length > 0 ? 'none' : '';
+  renderHomeMonthSummary();
+}
+
+// ====================================================================
+// ホーム：月次集計
+// ====================================================================
+
+function changeHomeYearMonth(dy, dm) {
+  homeMonth += dm;
+  homeYear  += dy;
+  if (homeMonth > 12) { homeMonth = 1;  homeYear++; }
+  if (homeMonth < 1)  { homeMonth = 12; homeYear--; }
+  renderHomeMonthSummary();
+}
+
+function renderHomeMonthSummary() {
+  const el = document.getElementById('home-month-summary');
+  if (!el) return;
+
+  const sites = getSitesForMonth(homeYear, homeMonth);
+  const statuses = [
+    { key:'見積中', bgHead:'#eff6ff', bdHead:'#bfdbfe', bdCard:'#bfdbfe', txtHead:'#1d4ed8' },
+    { key:'受注',   bgHead:'#f0fdf4', bdHead:'#bbf7d0', bdCard:'#bbf7d0', txtHead:'#15803d' },
+    { key:'施工中', bgHead:'#fffbeb', bdHead:'#fde68a', bdCard:'#fde68a', txtHead:'#a16207' },
+    { key:'完了',   bgHead:'#f9fafb', bdHead:'#e5e7eb', bdCard:'#e5e7eb', txtHead:'#374151' },
+    { key:'失注',   bgHead:'#fff1f2', bdHead:'#fecdd3', bdCard:'#fecdd3', txtHead:'#b91c1c' },
+  ];
+
+  let totalInc = 0, totalExc = 0, totalCount = 0;
+
+  const cardsHtml = statuses.map(({ key, bgHead, bdHead, bdCard, txtHead }) => {
+    const grp = sites.filter(s => s.status === key);
+    const inc = grp.reduce((a, s) => a + getSiteTaxIncluded(s), 0);
+    const exc = grp.reduce((a, s) => a + getSiteTaxExcluded(s), 0);
+    const tax = inc - exc;
+    totalInc += inc; totalExc += exc; totalCount += grp.length;
+    return `
+      <div class="home-sc" style="border-color:${bdCard};">
+        <div class="home-sc-head" style="background:${bgHead};border-color:${bdHead};color:${txtHead};">${key}</div>
+        <div class="home-sc-body">
+          <div class="home-sc-row"><span class="home-sc-lbl">税込</span><span class="home-sc-val">${formatYen(inc)}</span></div>
+          <div class="home-sc-row"><span class="home-sc-lbl">税抜</span><span class="home-sc-val">${formatYen(exc)}</span></div>
+          <div class="home-sc-row"><span class="home-sc-lbl">消費税</span><span class="home-sc-val">${formatYen(tax)}</span></div>
+          <div class="home-sc-cnt">${grp.length}件</div>
+        </div>
+      </div>`;
+  }).join('');
+
+  const totalTax = totalInc - totalExc;
+
+  el.innerHTML = `
+    <div class="card" style="margin-bottom:12px;">
+      <div class="card-header">
+        <span class="card-title">今月の状況</span>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <button class="home-mnav-btn" onclick="changeHomeYearMonth(0,-1)">‹</button>
+          <span style="font-size:14px;font-weight:700;min-width:80px;text-align:center;">${homeYear}年${homeMonth}月</span>
+          <button class="home-mnav-btn" onclick="changeHomeYearMonth(0,1)">›</button>
+        </div>
+      </div>
+      <div style="padding:12px 16px 14px;">
+        <div class="home-status-grid">${cardsHtml}</div>
+        <div class="home-total-wrap">
+          <div style="font-size:13px;font-weight:700;color:var(--primary);margin-bottom:6px;">月合計（${totalCount}件）</div>
+          <div class="home-total-row"><span class="home-total-lbl">税込合計</span><span class="home-total-val" style="color:var(--primary);">${formatYen(totalInc)}</span></div>
+          <div class="home-total-row"><span class="home-total-lbl">税抜合計</span><span class="home-total-val">${formatYen(totalExc)}</span></div>
+          <div class="home-total-row"><span class="home-total-lbl">消費税</span><span class="home-total-val">${formatYen(totalTax)}</span></div>
+        </div>
+      </div>
+    </div>`;
 }
 
 // ====================================================================
@@ -1570,18 +1668,28 @@ function renderSiteDetail() {
     <div class="card detail-section">
       <div class="card-header">
         <span class="card-title">見積PDF</span>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;">
-          <button class="btn btn-outline btn-sm" onclick="openManualLinkModal('${site.id}')">
-            <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
-            Driveリンクを手動登録
-          </button>
-          <button class="btn btn-primary btn-sm" id="upload-btn" onclick="startPdfUpload('${site.id}')">
-            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
-            PDFをアップロード
-          </button>
-        </div>
+        <button class="btn btn-outline btn-sm" onclick="openManualLinkModal('${site.id}')">
+          <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+          手動リンク登録
+        </button>
       </div>
-      <div id="upload-progress-area"></div>
+      <div class="pdf-upload-wrap">
+        <input type="file" id="pdf-file-input-${site.id}" accept=".pdf,application/pdf"
+               style="display:none;" onchange="onPdfFileSelected('${site.id}',this)">
+        <label for="pdf-file-input-${site.id}" class="pdf-file-label">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+          PDFを選択
+        </label>
+        <div id="pdf-selected-info" style="display:none;">
+          <div class="pdf-selected-row">
+            <span id="pdf-selected-name" class="pdf-selected-name"></span>
+            <button class="btn btn-primary btn-sm" id="upload-btn" onclick="doUploadSelected('${site.id}')">Driveへアップロード</button>
+            <button class="btn btn-secondary btn-sm" onclick="clearPdfSelection('${site.id}')" style="flex-shrink:0;">✕</button>
+          </div>
+        </div>
+        <div id="pdf-upload-error" style="display:none;" class="pdf-upload-error"></div>
+        <div id="upload-progress-area"></div>
+      </div>
       <div id="pdf-list">${pdfsHtml}</div>
     </div>
   `;
@@ -1801,6 +1909,52 @@ function confirmDeleteSite(id) {
 // PDF アップロード
 // ====================================================================
 
+// <label for> 経由でファイル選択された時のコールバック（iPhone Safari 対応）
+function onPdfFileSelected(siteId, input) {
+  const file = input.files[0];
+  if (!file) return;
+  selectedPdfFile   = file;
+  selectedPdfSiteId = siteId;
+  const nameEl = document.getElementById('pdf-selected-name');
+  const infoEl = document.getElementById('pdf-selected-info');
+  const errEl  = document.getElementById('pdf-upload-error');
+  if (nameEl) nameEl.textContent = file.name;
+  if (infoEl) infoEl.style.display = '';
+  if (errEl)  { errEl.style.display = 'none'; errEl.textContent = ''; }
+}
+
+function clearPdfSelection(siteId) {
+  selectedPdfFile   = null;
+  selectedPdfSiteId = null;
+  const input = document.getElementById(`pdf-file-input-${siteId}`);
+  if (input) input.value = '';
+  const infoEl = document.getElementById('pdf-selected-info');
+  const errEl  = document.getElementById('pdf-upload-error');
+  if (infoEl) infoEl.style.display = 'none';
+  if (errEl)  { errEl.style.display = 'none'; errEl.textContent = ''; }
+}
+
+function doUploadSelected(siteId) {
+  const errEl = document.getElementById('pdf-upload-error');
+  if (!selectedPdfFile || selectedPdfSiteId !== siteId) {
+    showToast('PDFファイルを選択してください', 'warning');
+    return;
+  }
+  if (!isLoggedIn()) {
+    if (errEl) {
+      errEl.textContent = 'Googleログインが必要です。上部の「Googleログイン」ボタンでログインしてください。';
+      errEl.style.display = '';
+    }
+    return;
+  }
+  if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+  const file = selectedPdfFile;
+  selectedPdfFile   = null;
+  selectedPdfSiteId = null;
+  ensureAuth(() => doUpload(siteId, file));
+}
+
+// pending PDF 用（積算ツールから受け取ったエントリのアップロード）
 function startPdfUpload(siteId) {
   const fileInput = document.getElementById('pdf-file-input');
   fileInput.onchange = (e) => {
@@ -1817,28 +1971,30 @@ async function doUpload(siteId, file) {
   if (!site) return;
 
   const progressArea = document.getElementById('upload-progress-area');
-  const uploadBtn = document.getElementById('upload-btn');
-  if (!progressArea) return; // 画面が変わった
+  const uploadBtn    = document.getElementById('upload-btn');
+  const errEl        = document.getElementById('pdf-upload-error');
+  if (!progressArea) return;
 
-  uploadBtn.disabled = true;
-  uploadBtn.innerHTML = `<span class="spinner-inline"></span> アップロード中`;
+  if (uploadBtn) { uploadBtn.disabled = true; uploadBtn.innerHTML = `<span class="spinner-inline"></span> アップロード中`; }
+  if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
 
   function showProg(msg, pct) {
     progressArea.innerHTML = `
-      <div style="padding:0 16px 12px;">
+      <div style="padding:8px 0 12px;">
         <div class="progress-label">${msg}</div>
         <div class="progress-bar"><div class="progress-fill" style="width:${pct||5}%"></div></div>
       </div>`;
   }
 
   try {
+    showProg('Google Driveに接続中...', 5);
     const folderId = await ensureFolderHierarchy(siteId, showProg);
 
     const timestamp = new Date().toISOString().slice(0,10);
-    const safeName = file.name.replace(/[/\\?%*:|"<>]/g, '-');
-    const fileName = `${timestamp}_${safeName}`;
+    const safeName  = file.name.replace(/[/\\?%*:|"<>]/g, '-');
+    const fileName  = `${timestamp}_${safeName}`;
 
-    const uploaded = await uploadFileToDrive(file, folderId, fileName, showProg);
+    const uploaded = await uploadFileToDrive(file, folderId, fileName, (msg, pct) => showProg(msg, pct));
 
     if (!site.pdfs) site.pdfs = [];
     site.pdfs.unshift({
@@ -1847,13 +2003,11 @@ async function doUpload(siteId, file) {
       fileId: uploaded.id,
       webViewLink: uploaded.webViewLink,
       uploadedAt: new Date().toISOString(),
+      source: 'drive',
     });
     site.updatedAt = new Date().toISOString();
-    // pendingPdfsのアップロード済みエントリを削除
     if (pendingUploadIndex !== null) {
-      if (site.pendingPdfs?.[pendingUploadIndex]) {
-        site.pendingPdfs.splice(pendingUploadIndex, 1);
-      }
+      if (site.pendingPdfs?.[pendingUploadIndex]) site.pendingPdfs.splice(pendingUploadIndex, 1);
       pendingUploadIndex = null;
     }
     saveData();
@@ -1861,17 +2015,30 @@ async function doUpload(siteId, file) {
     renderSiteDetail();
   } catch (err) {
     console.error('Upload error:', err);
-    progressArea.innerHTML = '';
+    if (progressArea) progressArea.innerHTML = '';
     if (uploadBtn) {
       uploadBtn.disabled = false;
-      uploadBtn.innerHTML = `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg> PDFをアップロード`;
+      uploadBtn.innerHTML = 'Driveへアップロード';
     }
+
+    let errMsg;
     if (err.message === 'TOKEN_EXPIRED') {
-      showToast('セッションが切れました。再ログインしてください。', 'warning');
+      errMsg = 'Googleログインの有効期限が切れました。再ログインしてください。';
       pendingAction = () => doUpload(siteId, file);
       login();
+    } else if (/401/.test(err.message)) {
+      errMsg = '認証エラーです。Googleログインをやり直してください。';
+    } else if (/403/.test(err.message)) {
+      errMsg = 'Google Driveへのアクセス権限がありません。OAuth設定とDrive APIの権限を確認してください。';
     } else {
-      showToast('アップロード失敗: ' + err.message, 'danger');
+      errMsg = 'アップロード失敗: ' + err.message;
+    }
+
+    if (errEl) {
+      errEl.textContent = errMsg;
+      errEl.style.display = '';
+    } else {
+      showToast(errMsg, 'danger');
     }
   }
 }
