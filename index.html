@@ -1,0 +1,1801 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#1a56db">
+  <title>US GLASS 見積管理</title>
+  <!--
+  ====================================================================
+  GitHub Pages + Google Drive 連携 セットアップガイド
+  ====================================================================
+
+  【Step 1: Google Cloud Console の設定】
+  1. https://console.cloud.google.com/ を開く
+  2. 新規プロジェクト作成（例: us-glass-estimate）
+  3. 「APIとサービス」→「ライブラリ」→「Google Drive API」を有効化
+  4. 「APIとサービス」→「認証情報」→「認証情報を作成」
+     → 「OAuthクライアントID」を選択
+  5. アプリの種類: 「ウェブアプリケーション」
+  6. 「承認済みのJavaScript生成元」に以下を追加:
+       https://あなたのユーザー名.github.io
+       （ローカルテスト用に http://localhost も追加可）
+  7. 「承認済みのリダイレクトURI」は不要（トークン方式のため）
+  8. 作成後、クライアントIDをコピー → このアプリの設定画面に貼り付け
+
+  【Step 2: GitHub Pages の公開】
+  1. GitHubリポジトリの Settings → Pages
+  2. Source: Deploy from a branch → main → / (root) → Save
+  3. 公開URL: https://あなたのユーザー名.github.io/リポジトリ名/
+  4. このURLをGoogle Cloudの「承認済みJavaScript生成元」に登録済か確認
+
+  【セキュリティ設計】
+  - OAuth scope は drive.file のみ（アプリ作成ファイルのみアクセス可能）
+  - Client IDはコード非記載・アプリ設定画面から入力
+  - アクセストークンはメモリのみ保存（ページリロードで消去）
+  - 見積データはlocalStorageのみ（外部送信なし）
+  - file:// プロトコルではGoogleログイン不可（httpsで使用）
+
+  【iPhone Safari の注意】
+  - ポップアップがブロックされる場合: 設定→Safari→ポップアップブロックをオフ
+  - またはホーム画面に追加（PWAモード）で安定動作
+  - ログインボタンは必ずユーザー操作から呼び出す（自動実行不可）
+  ====================================================================
+  -->
+  <style>
+    :root {
+      --primary: #1a56db;
+      --primary-dark: #1e429f;
+      --primary-light: #eff6ff;
+      --bg: #f3f4f6;
+      --card: #ffffff;
+      --text: #111827;
+      --text-muted: #6b7280;
+      --border: #e5e7eb;
+      --success: #059669;
+      --warning: #d97706;
+      --danger: #dc2626;
+      --radius: 10px;
+      --nav-h: 60px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Noto Sans JP', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ===== HEADER ===== */
+    .header {
+      background: var(--primary);
+      color: white;
+      padding: 0 16px;
+      height: 52px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .header-title { font-size: 17px; font-weight: 700; letter-spacing: -0.3px; }
+    .header-sub { font-size: 11px; opacity: 0.8; }
+    .header-left { display: flex; flex-direction: column; }
+    .header-right { display: flex; align-items: center; gap: 8px; }
+    .auth-status { font-size: 12px; opacity: 0.85; }
+    .btn-auth {
+      background: rgba(255,255,255,0.2);
+      border: 1px solid rgba(255,255,255,0.4);
+      color: white;
+      padding: 6px 13px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .btn-auth:active { background: rgba(255,255,255,0.3); }
+    .btn-auth.logged-in { background: rgba(255,255,255,0.15); }
+
+    /* ===== BOTTOM NAV ===== */
+    .bottom-nav {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      background: white;
+      border-top: 1px solid var(--border);
+      display: flex;
+      z-index: 100;
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    .nav-item {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 7px 4px;
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 10px;
+      gap: 3px;
+      border: none;
+      background: none;
+      min-height: var(--nav-h);
+    }
+    .nav-item.active { color: var(--primary); }
+    .nav-item svg { width: 24px; height: 24px; }
+    .nav-item span { font-weight: 500; }
+
+    /* ===== MAIN ===== */
+    .main {
+      padding: 16px;
+      padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 16px);
+      max-width: 640px;
+      margin: 0 auto;
+    }
+
+    /* ===== PAGES ===== */
+    .page { display: none; }
+    .page.active { display: block; }
+
+    /* ===== CARDS ===== */
+    .card {
+      background: var(--card);
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      margin-bottom: 14px;
+      overflow: hidden;
+    }
+    .card-header {
+      padding: 14px 16px 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .card-title { font-size: 13px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; }
+    .card-body { padding: 0 16px 16px; }
+
+    /* ===== BUTTONS ===== */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 10px 16px;
+      border-radius: var(--radius);
+      font-size: 15px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      transition: opacity 0.15s;
+      white-space: nowrap;
+    }
+    .btn:active { opacity: 0.75; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-secondary { background: var(--bg); color: var(--text); border: 1px solid var(--border); }
+    .btn-danger { background: var(--danger); color: white; }
+    .btn-success { background: var(--success); color: white; }
+    .btn-outline { background: transparent; color: var(--primary); border: 1px solid var(--primary); }
+    .btn-sm { padding: 7px 12px; font-size: 13px; }
+    .btn-full { width: 100%; }
+    .btn-icon { padding: 8px; border-radius: 8px; }
+    .spinner-inline {
+      display: inline-block; width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ===== FORMS ===== */
+    .form-group { margin-bottom: 14px; }
+    .form-label { display: block; font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 5px; }
+    .form-input, .form-select, .form-textarea {
+      width: 100%;
+      padding: 11px 13px;
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 16px; /* 16px prevents iOS zoom */
+      background: white;
+      color: var(--text);
+      -webkit-appearance: none;
+      appearance: none;
+    }
+    .form-select {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%236b7280' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      padding-right: 36px;
+    }
+    .form-input:focus, .form-select:focus, .form-textarea:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(26,86,219,0.1);
+    }
+    .form-textarea { min-height: 80px; resize: vertical; font-size: 15px; }
+    .form-hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+    /* ===== LIST ITEMS ===== */
+    .list-item {
+      display: flex;
+      align-items: center;
+      padding: 13px 16px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+    }
+    .list-item:last-child { border-bottom: none; }
+    .list-item:active { background: var(--bg); }
+    .list-item-icon {
+      width: 40px; height: 40px;
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      margin-right: 12px;
+      font-size: 18px;
+    }
+    .icon-company { background: #dbeafe; }
+    .icon-site { background: #d1fae5; }
+    .list-item-body { flex: 1; min-width: 0; }
+    .list-item-title { font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .list-item-sub { font-size: 13px; color: var(--text-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .list-item-right { flex-shrink: 0; display: flex; align-items: center; gap: 8px; }
+    .chevron { color: var(--border); }
+
+    /* ===== BADGES ===== */
+    .badge { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+    .badge-blue { background: #dbeafe; color: #1e40af; }
+    .badge-green { background: #d1fae5; color: #065f46; }
+    .badge-yellow { background: #fef3c7; color: #92400e; }
+    .badge-gray { background: #f3f4f6; color: #374151; }
+    .badge-red { background: #fee2e2; color: #991b1b; }
+
+    /* ===== STATS ===== */
+    .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+    .stat-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px;
+      text-align: center;
+    }
+    .stat-value { font-size: 26px; font-weight: 700; color: var(--primary); line-height: 1; }
+    .stat-label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+    /* ===== SECTION HEADER ===== */
+    .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .section-title { font-size: 17px; font-weight: 700; }
+
+    /* ===== BREADCRUMB ===== */
+    .breadcrumb {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .breadcrumb-link { color: var(--primary); cursor: pointer; text-decoration: none; }
+    .breadcrumb-sep { color: var(--border); }
+
+    /* ===== AMOUNT TABLE ===== */
+    .amount-table { width: 100%; }
+    .amount-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 9px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 14px;
+    }
+    .amount-row:last-child { border-bottom: none; font-size: 15px; font-weight: 700; }
+    .amount-label { color: var(--text-muted); }
+    .amount-value { font-weight: 500; font-feature-settings: "tnum"; }
+    .amount-positive { color: var(--success); }
+    .amount-negative { color: var(--danger); }
+
+    /* ===== PDF ITEMS ===== */
+    .pdf-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 11px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .pdf-item:last-child { border-bottom: none; }
+    .pdf-icon-wrap {
+      width: 38px; height: 38px;
+      background: #fee2e2;
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .pdf-info { flex: 1; min-width: 0; }
+    .pdf-name { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pdf-date { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+    .pdf-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+    /* ===== UPLOAD AREA ===== */
+    .upload-area {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 28px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      background: var(--bg);
+    }
+    .upload-area:hover, .upload-area.drag-over {
+      border-color: var(--primary);
+      background: var(--primary-light);
+    }
+    .upload-area svg { opacity: 0.4; margin-bottom: 8px; }
+    .upload-area p { font-size: 14px; color: var(--text-muted); }
+    .upload-area strong { color: var(--primary); }
+
+    /* ===== PROGRESS ===== */
+    .progress-wrap { margin-top: 12px; }
+    .progress-label { font-size: 13px; color: var(--text-muted); margin-bottom: 6px; }
+    .progress-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+    .progress-fill { height: 100%; background: var(--primary); border-radius: 3px; transition: width 0.3s; }
+
+    /* ===== MODAL ===== */
+    .modal-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 200;
+      align-items: flex-end;
+    }
+    .modal-overlay.show { display: flex; }
+    .modal {
+      background: white;
+      border-radius: 18px 18px 0 0;
+      padding: 8px 20px 20px;
+      width: 100%;
+      max-height: 92vh;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding-bottom: calc(20px + env(safe-area-inset-bottom));
+    }
+    .modal-handle {
+      width: 40px; height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      margin: 10px auto 16px;
+    }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+    .modal-title { font-size: 18px; font-weight: 700; }
+    .modal-close {
+      background: var(--bg); border: none;
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 18px;
+      line-height: 1;
+    }
+    .modal-actions { display: flex; gap: 10px; margin-top: 20px; }
+    .modal-actions .btn { flex: 1; }
+
+    /* ===== ALERTS ===== */
+    .alert { padding: 12px 14px; border-radius: var(--radius); font-size: 14px; margin-bottom: 14px; line-height: 1.5; }
+    .alert-info { background: #dbeafe; color: #1e40af; }
+    .alert-warning { background: #fef3c7; color: #92400e; }
+    .alert-success { background: #d1fae5; color: #065f46; }
+    .alert-danger { background: #fee2e2; color: #991b1b; }
+
+    /* ===== EMPTY STATE ===== */
+    .empty-state { text-align: center; padding: 48px 20px; color: var(--text-muted); }
+    .empty-state svg { opacity: 0.3; margin-bottom: 14px; }
+    .empty-state h3 { font-size: 16px; font-weight: 600; margin-bottom: 6px; color: var(--text); }
+    .empty-state p { font-size: 14px; }
+
+    /* ===== TOAST ===== */
+    #toast-container {
+      position: fixed;
+      bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 12px);
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 999;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      pointer-events: none;
+      min-width: 240px;
+      max-width: calc(100vw - 32px);
+    }
+    .toast {
+      background: #1f2937;
+      color: white;
+      padding: 11px 16px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 500;
+      animation: toast-in 0.3s ease, toast-out 0.3s ease 2.7s forwards;
+      text-align: center;
+    }
+    .toast.success { background: #065f46; }
+    .toast.danger { background: #991b1b; }
+    .toast.warning { background: #92400e; }
+    @keyframes toast-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes toast-out { from { opacity: 1; } to { opacity: 0; } }
+
+    /* ===== DRIVE LINK ===== */
+    .drive-link-row { display: flex; align-items: center; gap: 8px; padding: 10px 0; }
+    .drive-link { display: inline-flex; align-items: center; gap: 5px; color: var(--primary); font-size: 14px; text-decoration: none; font-weight: 500; }
+    .drive-link:hover { text-decoration: underline; }
+
+    /* ===== DETAIL SECTIONS ===== */
+    .detail-section { margin-bottom: 14px; }
+    .detail-actions { display: flex; gap: 10px; margin-top: 6px; }
+    .detail-actions .btn { flex: 1; }
+
+    /* ===== SETTINGS ===== */
+    .settings-item { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+    .settings-item:last-child { border-bottom: none; }
+    .settings-label { font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.4px; }
+    .settings-desc { font-size: 13px; color: var(--text-muted); margin-top: 4px; line-height: 1.5; }
+
+    /* ===== FILTER BAR ===== */
+    .filter-bar { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 12px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    .filter-bar::-webkit-scrollbar { display: none; }
+    .filter-chip {
+      flex-shrink: 0;
+      padding: 6px 13px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1.5px solid var(--border);
+      background: white;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    .filter-chip.active { background: var(--primary); color: white; border-color: var(--primary); }
+
+    @media (min-width: 480px) {
+      .stats-grid { grid-template-columns: repeat(4, 1fr); }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ===== HEADER ===== -->
+<header class="header">
+  <div class="header-left">
+    <div class="header-title">US GLASS</div>
+    <div class="header-sub">現場見積管理</div>
+  </div>
+  <div class="header-right">
+    <span class="auth-status" id="auth-status"></span>
+    <button class="btn-auth" id="btn-auth" onclick="toggleAuth()">ログイン</button>
+  </div>
+</header>
+
+<!-- ===== MAIN CONTENT ===== -->
+<main class="main">
+
+  <!-- HOME PAGE -->
+  <div class="page active" id="page-home">
+    <div id="home-login-notice"></div>
+    <div class="stats-grid" id="stats-grid"></div>
+    <div class="card" id="recent-sites-card">
+      <div class="card-header">
+        <span class="card-title">最近の現場</span>
+        <button class="btn btn-sm btn-outline" onclick="navigateTo('sites')">すべて表示</button>
+      </div>
+      <div id="recent-sites-list"></div>
+    </div>
+    <div class="card" id="home-guide-card">
+      <div class="card-header"><span class="card-title">はじめ方</span></div>
+      <div class="card-body">
+        <p style="font-size:14px;color:var(--text-muted);line-height:1.7;">
+          ① 設定画面でGoogle Client IDを入力<br>
+          ② Googleログインボタンをタップ<br>
+          ③ 会社を登録 → 現場を登録<br>
+          ④ 現場詳細からPDFをGoogle Driveへアップロード
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- COMPANIES PAGE -->
+  <div class="page" id="page-companies">
+    <div class="section-header">
+      <h2 class="section-title">建築会社</h2>
+      <button class="btn btn-primary btn-sm" onclick="openCompanyModal()">＋ 追加</button>
+    </div>
+    <div class="card" id="companies-list"></div>
+  </div>
+
+  <!-- SITES PAGE -->
+  <div class="page" id="page-sites">
+    <div class="section-header">
+      <h2 class="section-title">現場一覧</h2>
+      <button class="btn btn-primary btn-sm" onclick="openSiteModal()">＋ 追加</button>
+    </div>
+    <div class="filter-bar" id="company-filter-bar"></div>
+    <div class="card" id="sites-list"></div>
+  </div>
+
+  <!-- SITE DETAIL PAGE -->
+  <div class="page" id="page-site-detail">
+    <div class="breadcrumb" id="detail-breadcrumb"></div>
+    <div id="detail-content"></div>
+  </div>
+
+  <!-- SETTINGS PAGE -->
+  <div class="page" id="page-settings">
+    <div class="section-header" style="margin-bottom:14px;">
+      <h2 class="section-title">設定</h2>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><span class="card-title">Google Drive 連携</span></div>
+      <div class="settings-item">
+        <div class="settings-label">OAuth Client ID</div>
+        <div class="form-group" style="margin-bottom:6px;">
+          <input type="text" class="form-input" id="input-client-id"
+            placeholder="xxxx.apps.googleusercontent.com"
+            autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
+        </div>
+        <p class="settings-desc">Google Cloud Console で発行したクライアントIDを入力してください。コードには保存されず、このデバイスのみに記録されます。</p>
+        <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick="saveClientId()">保存</button>
+      </div>
+      <div class="settings-item">
+        <div class="settings-label">Drive ルートフォルダID（自動設定）</div>
+        <div id="root-folder-info" style="font-size:13px;color:var(--text-muted);"></div>
+        <button class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="resetRootFolder()">フォルダIDをリセット</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><span class="card-title">データ管理</span></div>
+      <div class="settings-item">
+        <div class="settings-label">バックアップ（JSONエクスポート）</div>
+        <p class="settings-desc">現場・会社データをJSONファイルとしてダウンロードします。</p>
+        <button class="btn btn-secondary btn-sm" style="margin-top:10px;" onclick="exportData()">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+          JSONダウンロード
+        </button>
+      </div>
+      <div class="settings-item">
+        <div class="settings-label">復元（JSONインポート）</div>
+        <p class="settings-desc">バックアップしたJSONファイルからデータを復元します。<strong style="color:var(--danger);">現在のデータは上書きされます。</strong></p>
+        <button class="btn btn-secondary btn-sm" style="margin-top:10px;" onclick="document.getElementById('import-file').click()">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+          JSONを選択して復元
+        </button>
+        <input type="file" id="import-file" accept=".json" style="display:none" onchange="importData(this)">
+      </div>
+      <div class="settings-item">
+        <div class="settings-label" style="color:var(--danger);">危険な操作</div>
+        <p class="settings-desc">すべての現場・会社データを削除します。この操作は取り消せません。</p>
+        <button class="btn btn-danger btn-sm" style="margin-top:10px;" onclick="confirmDeleteAll()">すべてのデータを削除</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><span class="card-title">このアプリについて</span></div>
+      <div class="card-body">
+        <p style="font-size:13px;color:var(--text-muted);line-height:1.7;">
+          US GLASS 現場見積管理 v1.0<br>
+          Google Drive scope: drive.file（アプリが作成したファイルのみ）<br>
+          データ保存: このデバイスのlocalStorageのみ<br>
+          外部サーバーへのデータ送信: なし
+        </p>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- ===== BOTTOM NAV ===== -->
+<nav class="bottom-nav">
+  <button class="nav-item active" id="nav-home" onclick="navigateTo('home')">
+    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+    <span>ホーム</span>
+  </button>
+  <button class="nav-item" id="nav-companies" onclick="navigateTo('companies')">
+    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="10" y1="14" x2="14" y2="14"/></svg>
+    <span>会社</span>
+  </button>
+  <button class="nav-item" id="nav-sites" onclick="navigateTo('sites')">
+    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+    <span>現場</span>
+  </button>
+  <button class="nav-item" id="nav-settings" onclick="navigateTo('settings')">
+    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+    <span>設定</span>
+  </button>
+</nav>
+
+<!-- ===== MODALS ===== -->
+
+<!-- Company Modal -->
+<div class="modal-overlay" id="modal-company">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <h3 class="modal-title" id="company-modal-title">会社を追加</h3>
+      <button class="modal-close" onclick="closeModal('modal-company')">✕</button>
+    </div>
+    <input type="hidden" id="company-edit-id">
+    <div class="form-group">
+      <label class="form-label">会社名 *</label>
+      <input type="text" class="form-input" id="company-name" placeholder="例：山田建設株式会社" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label class="form-label">担当者名</label>
+      <input type="text" class="form-input" id="company-contact" placeholder="例：田中様" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label class="form-label">電話番号</label>
+      <input type="tel" class="form-input" id="company-phone" placeholder="例：03-1234-5678">
+    </div>
+    <div class="form-group">
+      <label class="form-label">メモ</label>
+      <textarea class="form-textarea" id="company-notes" placeholder="備考など"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('modal-company')">キャンセル</button>
+      <button class="btn btn-primary" onclick="saveCompany()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Site Modal -->
+<div class="modal-overlay" id="modal-site">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <h3 class="modal-title" id="site-modal-title">現場を追加</h3>
+      <button class="modal-close" onclick="closeModal('modal-site')">✕</button>
+    </div>
+    <input type="hidden" id="site-edit-id">
+    <div class="form-group">
+      <label class="form-label">建築会社 *</label>
+      <select class="form-select" id="site-company-id">
+        <option value="">会社を選択</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">現場名 *</label>
+      <input type="text" class="form-input" id="site-name" placeholder="例：新宿タワーマンション新築工事" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label class="form-label">ステータス</label>
+      <select class="form-select" id="site-status">
+        <option value="見積中">見積中</option>
+        <option value="受注">受注</option>
+        <option value="施工中">施工中</option>
+        <option value="完了">完了</option>
+        <option value="失注">失注</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">見積金額（円）</label>
+        <input type="text" inputmode="numeric" class="form-input" id="site-estimate" placeholder="0">
+      </div>
+      <div class="form-group">
+        <label class="form-label">原価（円）</label>
+        <input type="text" inputmode="numeric" class="form-input" id="site-cost" placeholder="0">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">現場住所</label>
+      <input type="text" class="form-input" id="site-address" placeholder="例：東京都新宿区..." autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label class="form-label">メモ</label>
+      <textarea class="form-textarea" id="site-notes" placeholder="工期、担当者など"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('modal-site')">キャンセル</button>
+      <button class="btn btn-primary" onclick="saveSite()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm Modal -->
+<div class="modal-overlay" id="modal-confirm">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <h3 class="modal-title" id="confirm-title">確認</h3>
+      <button class="modal-close" onclick="closeModal('modal-confirm')">✕</button>
+    </div>
+    <p id="confirm-message" style="font-size:15px;color:var(--text-muted);line-height:1.6;margin-bottom:4px;"></p>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('modal-confirm')">キャンセル</button>
+      <button class="btn btn-danger" id="confirm-ok-btn">削除</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== TOAST ===== -->
+<div id="toast-container"></div>
+
+<!-- ===== HIDDEN FILE INPUT ===== -->
+<input type="file" id="pdf-file-input" accept=".pdf,application/pdf" style="display:none">
+
+<!-- ===== GOOGLE IDENTITY SERVICES ===== -->
+<!-- 注: async属性でロードします。ログインはユーザー操作から呼び出すため問題なし -->
+<script src="https://accounts.google.com/gsi/client" async></script>
+
+<script>
+// ====================================================================
+// US GLASS 現場見積管理 - メインスクリプト
+// ====================================================================
+
+// ---- 定数 ----
+const STORAGE_KEY = 'usGlassData_v1';
+const STATUS_COLORS = {
+  '見積中': 'badge-blue',
+  '受注':   'badge-green',
+  '施工中': 'badge-yellow',
+  '完了':   'badge-gray',
+  '失注':   'badge-red',
+};
+const DRIVE_API = 'https://www.googleapis.com/drive/v3';
+const DRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
+
+// ---- ステート ----
+let appData = loadData();
+let accessToken = null;   // メモリのみ（localStorage非保存）
+let tokenExpiry = 0;
+let tokenClient = null;
+let pendingAction = null; // ログイン後に実行するアクション
+let currentPage = 'home';
+let currentSiteId = null;
+let companyFilter = null; // sites ページのフィルター
+
+// ====================================================================
+// データ管理
+// ====================================================================
+
+function loadData() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const d = JSON.parse(raw);
+      if (!d.companies) d.companies = [];
+      if (!d.sites) d.sites = [];
+      if (!d.settings) d.settings = { clientId: '', rootFolderId: '' };
+      return d;
+    }
+  } catch(e) { console.error('loadData:', e); }
+  return { companies: [], sites: [], settings: { clientId: '', rootFolderId: '' } };
+}
+
+function saveData() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+  } catch(e) {
+    showToast('データ保存に失敗しました（ストレージ容量不足の可能性）', 'danger');
+  }
+}
+
+function generateId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+function formatYen(n) {
+  const num = parseInt(n) || 0;
+  return '¥' + num.toLocaleString('ja-JP');
+}
+
+function formatDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
+}
+
+function parseAmount(str) {
+  return parseInt((str || '').replace(/[^0-9]/g, '')) || 0;
+}
+
+function getStatusBadge(status) {
+  const cls = STATUS_COLORS[status] || 'badge-gray';
+  return `<span class="badge ${cls}">${status}</span>`;
+}
+
+function calcFinancials(site) {
+  const estimate = parseInt(site.estimateAmount) || 0;
+  const cost = parseInt(site.cost) || 0;
+  const profit = estimate - cost;
+  const margin = estimate > 0 ? (profit / estimate * 100).toFixed(1) : '0.0';
+  return { estimate, cost, profit, margin };
+}
+
+// ====================================================================
+// Google 認証
+// ====================================================================
+
+function isLoggedIn() {
+  return !!(accessToken && Date.now() < tokenExpiry);
+}
+
+function initTokenClient() {
+  if (!appData.settings.clientId) return false;
+  if (!window.google?.accounts?.oauth2) {
+    showToast('Google認証ライブラリの読み込み中です。しばらく待ってから再試行してください。', 'warning');
+    return false;
+  }
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: appData.settings.clientId,
+    scope: 'https://www.googleapis.com/auth/drive.file',
+    callback: onTokenReceived,
+    error_callback: onAuthError,
+  });
+  return true;
+}
+
+function onTokenReceived(resp) {
+  if (resp.error) {
+    showToast('ログインエラー: ' + resp.error, 'danger');
+    return;
+  }
+  accessToken = resp.access_token;
+  // expires_in は秒。1分のバッファを持たせる
+  tokenExpiry = Date.now() + (resp.expires_in - 60) * 1000;
+  updateAuthUI();
+  showToast('Googleにログインしました', 'success');
+  if (pendingAction) {
+    const action = pendingAction;
+    pendingAction = null;
+    action();
+  }
+}
+
+function onAuthError(err) {
+  console.error('AuthError:', err);
+  const msg = err?.type === 'popup_closed' ? 'ログインがキャンセルされました' :
+               err?.type === 'popup_blocked' ? 'ポップアップがブロックされました。\nSafariの設定→ポップアップをオフにしてください' :
+               'ログインに失敗しました: ' + (err?.message || err?.type || '');
+  showToast(msg, 'danger');
+  pendingAction = null;
+}
+
+function toggleAuth() {
+  if (isLoggedIn()) {
+    logout();
+  } else {
+    login();
+  }
+}
+
+function login() {
+  if (!appData.settings.clientId) {
+    showToast('設定画面でClient IDを入力してください', 'warning');
+    navigateTo('settings');
+    return;
+  }
+  if (!tokenClient && !initTokenClient()) return;
+  // prompt: '' は既存セッションを再利用（2回目以降のログインが速い）
+  tokenClient.requestAccessToken({ prompt: isLoggedIn() ? '' : 'select_account' });
+}
+
+function logout() {
+  if (accessToken) {
+    try { google.accounts.oauth2.revoke(accessToken, () => {}); } catch(e) {}
+  }
+  accessToken = null;
+  tokenExpiry = 0;
+  pendingAction = null;
+  updateAuthUI();
+  showToast('ログアウトしました');
+}
+
+function ensureAuth(action) {
+  if (isLoggedIn()) {
+    action();
+  } else {
+    pendingAction = action;
+    login();
+  }
+}
+
+function updateAuthUI() {
+  const statusEl = document.getElementById('auth-status');
+  const btnEl = document.getElementById('btn-auth');
+  if (isLoggedIn()) {
+    statusEl.textContent = '✓ ログイン中';
+    btnEl.textContent = 'ログアウト';
+    btnEl.classList.add('logged-in');
+  } else {
+    statusEl.textContent = '';
+    btnEl.textContent = 'Googleログイン';
+    btnEl.classList.remove('logged-in');
+  }
+  // ホーム画面の通知更新
+  if (currentPage === 'home') renderHome();
+}
+
+// ====================================================================
+// Google Drive API
+// ====================================================================
+
+async function driveGet(path) {
+  const res = await fetch(DRIVE_API + path, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  if (res.status === 401) {
+    accessToken = null; tokenExpiry = 0;
+    throw new Error('TOKEN_EXPIRED');
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message || `Drive API ${res.status}`);
+  }
+  return res.json();
+}
+
+async function drivePost(path, body) {
+  const res = await fetch(DRIVE_API + path, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401) {
+    accessToken = null; tokenExpiry = 0;
+    throw new Error('TOKEN_EXPIRED');
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message || `Drive API ${res.status}`);
+  }
+  return res.json();
+}
+
+// フォルダを検索し、なければ作成して返す
+async function getOrCreateFolder(name, parentId) {
+  const safeParent = parentId || 'root';
+  const escapedName = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const q = `name='${escapedName}' and mimeType='application/vnd.google-apps.folder' and '${safeParent}' in parents and trashed=false`;
+  const url = `/files?q=${encodeURIComponent(q)}&fields=files(id,name,webViewLink)&spaces=drive`;
+
+  const result = await driveGet(url);
+  if (result.files?.length > 0) return result.files[0];
+
+  return drivePost(`/files?fields=id,name,webViewLink`, {
+    name,
+    mimeType: 'application/vnd.google-apps.folder',
+    parents: [safeParent],
+  });
+}
+
+// フォルダ階層を確保し、現場フォルダIDを返す
+async function ensureFolderHierarchy(siteId, onProgress) {
+  const site = appData.sites.find(s => s.id === siteId);
+  const company = appData.companies.find(c => c.id === site.companyId);
+  if (!site || !company) throw new Error('現場または会社が見つかりません');
+
+  onProgress?.('ルートフォルダを確認中...');
+  if (!appData.settings.rootFolderId) {
+    const root = await getOrCreateFolder('US_GLASS_見積管理', 'root');
+    appData.settings.rootFolderId = root.id;
+    saveData();
+  }
+
+  onProgress?.(`${company.name} フォルダを確認中...`);
+  if (!company.driveFolderId) {
+    const cf = await getOrCreateFolder(company.name, appData.settings.rootFolderId);
+    company.driveFolderId = cf.id;
+    saveData();
+  }
+
+  onProgress?.(`${site.name} フォルダを確認中...`);
+  if (!site.driveFolderId) {
+    const sf = await getOrCreateFolder(site.name, company.driveFolderId);
+    site.driveFolderId = sf.id;
+    site.driveFolderLink = sf.webViewLink;
+    saveData();
+  }
+
+  return site.driveFolderId;
+}
+
+// PDFをDriveにアップロード（multipart）
+async function uploadFileToDrive(file, folderId, fileName, onProgress) {
+  onProgress?.('アップロード中...');
+
+  const metadata = { name: fileName, parents: [folderId] };
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+  form.append('file', file);
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${DRIVE_UPLOAD}/files?uploadType=multipart&fields=id,name,webViewLink`);
+    xhr.setRequestHeader('Authorization', `Bearer ${accessToken}`);
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        const pct = Math.round(e.loaded / e.total * 100);
+        onProgress?.(`アップロード中... ${pct}%`, pct);
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status === 200 || xhr.status === 201) {
+        resolve(JSON.parse(xhr.responseText));
+      } else if (xhr.status === 401) {
+        accessToken = null; tokenExpiry = 0;
+        reject(new Error('TOKEN_EXPIRED'));
+      } else {
+        try {
+          const err = JSON.parse(xhr.responseText);
+          reject(new Error(err.error?.message || `Upload ${xhr.status}`));
+        } catch {
+          reject(new Error(`Upload ${xhr.status}`));
+        }
+      }
+    };
+    xhr.onerror = () => reject(new Error('ネットワークエラー'));
+    xhr.send(form);
+  });
+}
+
+// ====================================================================
+// ナビゲーション
+// ====================================================================
+
+function navigateTo(page, param) {
+  // すべてのページを非表示
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+
+  currentPage = page;
+
+  if (page === 'site-detail') {
+    currentSiteId = param;
+  }
+
+  const pageEl = document.getElementById('page-' + page);
+  if (pageEl) pageEl.classList.add('active');
+
+  const navEl = document.getElementById('nav-' + page);
+  if (navEl) navEl.classList.add('active');
+  // site-detailはsitesのナビをアクティブに
+  if (page === 'site-detail') {
+    document.getElementById('nav-sites').classList.add('active');
+  }
+
+  // ページ内容をレンダリング
+  switch (page) {
+    case 'home':      renderHome(); break;
+    case 'companies': renderCompanies(); break;
+    case 'sites':     renderSites(); break;
+    case 'site-detail': renderSiteDetail(); break;
+    case 'settings':  renderSettings(); break;
+  }
+
+  window.scrollTo(0, 0);
+}
+
+// ====================================================================
+// レンダリング：ホーム
+// ====================================================================
+
+function renderHome() {
+  const stats = document.getElementById('stats-grid');
+  const companies = appData.companies.length;
+  const sites = appData.sites.length;
+  const won = appData.sites.filter(s => s.status === '受注' || s.status === '施工中' || s.status === '完了').length;
+  const totalEst = appData.sites.reduce((a, s) => a + (parseInt(s.estimateAmount) || 0), 0);
+
+  stats.innerHTML = `
+    <div class="stat-card">
+      <div class="stat-value">${companies}</div>
+      <div class="stat-label">建築会社</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value">${sites}</div>
+      <div class="stat-label">現場数</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value">${won}</div>
+      <div class="stat-label">受注・施工・完了</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" style="font-size:16px;">¥${(totalEst/10000).toLocaleString('ja-JP',{maximumFractionDigits:0})}万</div>
+      <div class="stat-label">見積合計</div>
+    </div>
+  `;
+
+  const noticeEl = document.getElementById('home-login-notice');
+  if (!appData.settings.clientId) {
+    noticeEl.innerHTML = `<div class="alert alert-warning">⚙️ 設定画面でGoogle Client IDを入力してください。<br><button class="btn btn-sm btn-primary" style="margin-top:8px;" onclick="navigateTo('settings')">設定を開く</button></div>`;
+  } else if (!isLoggedIn()) {
+    noticeEl.innerHTML = `<div class="alert alert-info">Googleにログインすると、PDFをDriveに保存できます。<br><button class="btn btn-sm btn-primary" style="margin-top:8px;" onclick="login()">Googleログイン</button></div>`;
+  } else {
+    noticeEl.innerHTML = `<div class="alert alert-success">✓ Google Driveと連携済みです</div>`;
+  }
+
+  const recentList = document.getElementById('recent-sites-list');
+  const recent = [...appData.sites].sort((a,b) => (b.updatedAt||'') > (a.updatedAt||'') ? 1 : -1).slice(0, 5);
+  if (!recent.length) {
+    recentList.innerHTML = `<div style="padding:16px;text-align:center;color:var(--text-muted);font-size:14px;">現場がありません。「現場」タブから追加してください。</div>`;
+  } else {
+    recentList.innerHTML = recent.map(s => {
+      const company = appData.companies.find(c => c.id === s.companyId);
+      return `<div class="list-item" onclick="navigateTo('site-detail','${s.id}')">
+        <div class="list-item-icon icon-site">📋</div>
+        <div class="list-item-body">
+          <div class="list-item-title">${esc(s.name)}</div>
+          <div class="list-item-sub">${esc(company?.name || '会社未設定')}</div>
+        </div>
+        <div class="list-item-right">
+          ${getStatusBadge(s.status)}
+          <svg class="chevron" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  document.getElementById('home-guide-card').style.display = appData.sites.length > 0 ? 'none' : '';
+}
+
+// ====================================================================
+// レンダリング：会社一覧
+// ====================================================================
+
+function renderCompanies() {
+  const listEl = document.getElementById('companies-list');
+  if (!appData.companies.length) {
+    listEl.innerHTML = `<div class="empty-state">
+      <svg width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>
+      <h3>会社が登録されていません</h3>
+      <p>「＋ 追加」から建築会社を登録してください</p>
+    </div>`;
+    return;
+  }
+  listEl.innerHTML = appData.companies.map(c => {
+    const siteCount = appData.sites.filter(s => s.companyId === c.id).length;
+    return `<div class="list-item" onclick="navigateToCompanySites('${c.id}')">
+      <div class="list-item-icon icon-company">🏢</div>
+      <div class="list-item-body">
+        <div class="list-item-title">${esc(c.name)}</div>
+        <div class="list-item-sub">${siteCount}件の現場${c.contact ? '・' + esc(c.contact) : ''}</div>
+      </div>
+      <div class="list-item-right">
+        <button class="btn btn-secondary btn-sm btn-icon" onclick="event.stopPropagation();openCompanyModal('${c.id}')">
+          <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </button>
+        <svg class="chevron" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function navigateToCompanySites(companyId) {
+  companyFilter = companyId;
+  navigateTo('sites');
+}
+
+// ====================================================================
+// レンダリング：現場一覧
+// ====================================================================
+
+function renderSites() {
+  const filterBar = document.getElementById('company-filter-bar');
+  filterBar.innerHTML = `<div class="filter-chip ${companyFilter === null ? 'active' : ''}" onclick="setCompanyFilter(null)">すべて</div>` +
+    appData.companies.map(c =>
+      `<div class="filter-chip ${companyFilter === c.id ? 'active' : ''}" onclick="setCompanyFilter('${c.id}')">${esc(c.name)}</div>`
+    ).join('');
+
+  const listEl = document.getElementById('sites-list');
+  let sites = [...appData.sites];
+  if (companyFilter) sites = sites.filter(s => s.companyId === companyFilter);
+  sites.sort((a,b) => (b.updatedAt||'') > (a.updatedAt||'') ? 1 : -1);
+
+  if (!sites.length) {
+    listEl.innerHTML = `<div class="empty-state">
+      <svg width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <h3>現場がありません</h3>
+      <p>「＋ 追加」から現場を登録してください</p>
+    </div>`;
+    return;
+  }
+
+  listEl.innerHTML = sites.map(s => {
+    const company = appData.companies.find(c => c.id === s.companyId);
+    const fin = calcFinancials(s);
+    return `<div class="list-item" onclick="navigateTo('site-detail','${s.id}')">
+      <div class="list-item-icon icon-site">📋</div>
+      <div class="list-item-body">
+        <div class="list-item-title">${esc(s.name)}</div>
+        <div class="list-item-sub">${esc(company?.name || '会社未設定')}${fin.estimate > 0 ? '・' + formatYen(fin.estimate) : ''}</div>
+      </div>
+      <div class="list-item-right">
+        ${getStatusBadge(s.status)}
+        <svg class="chevron" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function setCompanyFilter(id) {
+  companyFilter = id;
+  renderSites();
+}
+
+// ====================================================================
+// レンダリング：現場詳細
+// ====================================================================
+
+function renderSiteDetail() {
+  const site = appData.sites.find(s => s.id === currentSiteId);
+  if (!site) { navigateTo('sites'); return; }
+  const company = appData.companies.find(c => c.id === site.companyId);
+  const fin = calcFinancials(site);
+
+  document.getElementById('detail-breadcrumb').innerHTML = `
+    <span class="breadcrumb-link" onclick="navigateTo('sites')">現場一覧</span>
+    <span class="breadcrumb-sep">›</span>
+    <span class="breadcrumb-link" onclick="navigateToCompanySites('${company?.id}')">${esc(company?.name || '会社未設定')}</span>
+    <span class="breadcrumb-sep">›</span>
+    <span>${esc(site.name)}</span>
+  `;
+
+  const pdfsHtml = (site.pdfs || []).length === 0
+    ? '<div style="padding:16px;text-align:center;color:var(--text-muted);font-size:14px;">PDFがありません</div>'
+    : (site.pdfs || []).map((p, i) => `
+      <div class="pdf-item">
+        <div class="pdf-icon-wrap">
+          <svg width="20" height="20" fill="none" stroke="#dc2626" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+        </div>
+        <div class="pdf-info">
+          <div class="pdf-name">${esc(p.name)}</div>
+          <div class="pdf-date">${formatDate(p.uploadedAt)}</div>
+        </div>
+        <div class="pdf-actions">
+          ${p.webViewLink ? `<a href="${p.webViewLink}" target="_blank" rel="noopener" class="btn btn-outline btn-sm">開く</a>` : ''}
+          <button class="btn btn-secondary btn-sm btn-icon" onclick="confirmDeletePdf('${site.id}',${i})" title="削除">
+            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
+          </button>
+        </div>
+      </div>
+    `).join('');
+
+  const driveLinkHtml = site.driveFolderLink
+    ? `<div class="drive-link-row">
+        <svg width="16" height="16" viewBox="0 0 87.3 78" fill="none">
+          <path d="M6.6 66.85l3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3L27.5 53H0c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/>
+          <path d="M43.65 25L29.9 0c-1.35.8-2.5 1.9-3.3 3.3L1.2 48.5c-.8 1.4-1.2 2.95-1.2 4.5h27.5z" fill="#00ac47"/>
+          <path d="M73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75L85.1 57c.8-1.4 1.2-2.95 1.2-4.5H58.8L73.55 76.8z" fill="#ea4335"/>
+          <path d="M43.65 25L57.4 0H29.9z" fill="#00832d"/>
+          <path d="M58.8 52.5H27.5L13.75 76.8h49.8z" fill="#2684fc"/>
+          <path d="M73.4 3.3c-.8-1.4-1.95-2.5-3.3-3.3L43.65 25 57.4 0z" fill="#ffba00"/>
+          <path d="M73.4 3.3L57.4 0 73.55 76.8 85.1 57c.8-1.4 1.2-2.95 1.2-4.5H58.8z" fill="#ffba00"/>
+        </svg>
+        <a href="${site.driveFolderLink}" target="_blank" rel="noopener" class="drive-link">Driveフォルダを開く</a>
+      </div>`
+    : `<p style="font-size:13px;color:var(--text-muted);">PDFをアップロードすると自動作成されます</p>`;
+
+  document.getElementById('detail-content').innerHTML = `
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px;">
+      <div>
+        <h1 style="font-size:20px;font-weight:700;line-height:1.3;">${esc(site.name)}</h1>
+        <div style="margin-top:6px;">${getStatusBadge(site.status)}</div>
+      </div>
+    </div>
+
+    <div class="detail-actions" style="margin-bottom:14px;">
+      <button class="btn btn-secondary" onclick="openSiteModal('${site.id}')">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        編集
+      </button>
+      <button class="btn btn-danger" onclick="confirmDeleteSite('${site.id}')">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
+        削除
+      </button>
+    </div>
+
+    <!-- 金額 -->
+    <div class="card detail-section">
+      <div class="card-header"><span class="card-title">見積・収支</span></div>
+      <div class="card-body" style="padding-top:0;">
+        <div class="amount-table">
+          <div class="amount-row"><span class="amount-label">見積金額</span><span class="amount-value">${formatYen(fin.estimate)}</span></div>
+          <div class="amount-row"><span class="amount-label">原価</span><span class="amount-value">${formatYen(fin.cost)}</span></div>
+          <div class="amount-row">
+            <span class="amount-label">粗利</span>
+            <span class="amount-value ${fin.profit >= 0 ? 'amount-positive' : 'amount-negative'}">${formatYen(fin.profit)}</span>
+          </div>
+          <div class="amount-row">
+            <span class="amount-label">粗利率</span>
+            <span class="amount-value ${fin.profit >= 0 ? 'amount-positive' : 'amount-negative'}">${fin.margin}%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Drive -->
+    <div class="card detail-section">
+      <div class="card-header"><span class="card-title">Google Drive フォルダ</span></div>
+      <div class="card-body" style="padding-top:0;">${driveLinkHtml}</div>
+    </div>
+
+    <!-- メモ -->
+    ${site.notes ? `
+    <div class="card detail-section">
+      <div class="card-header"><span class="card-title">メモ</span></div>
+      <div class="card-body" style="padding-top:0;font-size:14px;line-height:1.7;white-space:pre-wrap;">${esc(site.notes)}</div>
+    </div>` : ''}
+
+    ${site.address ? `
+    <div class="card detail-section">
+      <div class="card-header"><span class="card-title">住所</span></div>
+      <div class="card-body" style="padding-top:0;font-size:14px;">${esc(site.address)}</div>
+    </div>` : ''}
+
+    <!-- PDF -->
+    <div class="card detail-section">
+      <div class="card-header">
+        <span class="card-title">見積PDF</span>
+        <button class="btn btn-primary btn-sm" id="upload-btn" onclick="startPdfUpload('${site.id}')">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+          PDFをアップロード
+        </button>
+      </div>
+      <div id="upload-progress-area"></div>
+      <div id="pdf-list">${pdfsHtml}</div>
+    </div>
+  `;
+}
+
+// ====================================================================
+// レンダリング：設定
+// ====================================================================
+
+function renderSettings() {
+  document.getElementById('input-client-id').value = appData.settings.clientId || '';
+  const rootInfo = document.getElementById('root-folder-info');
+  if (appData.settings.rootFolderId) {
+    rootInfo.textContent = 'ID: ' + appData.settings.rootFolderId;
+  } else {
+    rootInfo.textContent = '未設定（初回アップロード時に自動作成）';
+  }
+}
+
+// ====================================================================
+// 会社 CRUD
+// ====================================================================
+
+function openCompanyModal(editId) {
+  document.getElementById('company-edit-id').value = editId || '';
+  document.getElementById('company-modal-title').textContent = editId ? '会社を編集' : '会社を追加';
+  if (editId) {
+    const c = appData.companies.find(x => x.id === editId);
+    if (c) {
+      document.getElementById('company-name').value = c.name || '';
+      document.getElementById('company-contact').value = c.contact || '';
+      document.getElementById('company-phone').value = c.phone || '';
+      document.getElementById('company-notes').value = c.notes || '';
+    }
+  } else {
+    document.getElementById('company-name').value = '';
+    document.getElementById('company-contact').value = '';
+    document.getElementById('company-phone').value = '';
+    document.getElementById('company-notes').value = '';
+  }
+  openModal('modal-company');
+}
+
+function saveCompany() {
+  const name = document.getElementById('company-name').value.trim();
+  if (!name) { showToast('会社名を入力してください', 'warning'); return; }
+
+  const editId = document.getElementById('company-edit-id').value;
+  if (editId) {
+    const c = appData.companies.find(x => x.id === editId);
+    if (c) {
+      c.name = name;
+      c.contact = document.getElementById('company-contact').value.trim();
+      c.phone = document.getElementById('company-phone').value.trim();
+      c.notes = document.getElementById('company-notes').value.trim();
+      c.updatedAt = new Date().toISOString();
+    }
+    showToast('会社情報を更新しました', 'success');
+  } else {
+    appData.companies.push({
+      id: generateId(),
+      name,
+      contact: document.getElementById('company-contact').value.trim(),
+      phone: document.getElementById('company-phone').value.trim(),
+      notes: document.getElementById('company-notes').value.trim(),
+      createdAt: new Date().toISOString(),
+    });
+    showToast('会社を追加しました', 'success');
+  }
+
+  saveData();
+  closeModal('modal-company');
+  renderCompanies();
+}
+
+function confirmDeleteCompany(id) {
+  const c = appData.companies.find(x => x.id === id);
+  const siteCount = appData.sites.filter(s => s.companyId === id).length;
+  showConfirm(
+    `「${c?.name}」を削除しますか？`,
+    siteCount > 0 ? `この会社に紐づく${siteCount}件の現場も削除されます。` : 'この操作は取り消せません。',
+    () => {
+      appData.companies = appData.companies.filter(x => x.id !== id);
+      appData.sites = appData.sites.filter(s => s.companyId !== id);
+      saveData();
+      renderCompanies();
+      showToast('会社を削除しました');
+    }
+  );
+}
+
+// ====================================================================
+// 現場 CRUD
+// ====================================================================
+
+function openSiteModal(editId) {
+  document.getElementById('site-edit-id').value = editId || '';
+  document.getElementById('site-modal-title').textContent = editId ? '現場を編集' : '現場を追加';
+
+  const sel = document.getElementById('site-company-id');
+  sel.innerHTML = '<option value="">会社を選択</option>' +
+    appData.companies.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+
+  if (editId) {
+    const s = appData.sites.find(x => x.id === editId);
+    if (s) {
+      sel.value = s.companyId || '';
+      document.getElementById('site-name').value = s.name || '';
+      document.getElementById('site-status').value = s.status || '見積中';
+      document.getElementById('site-estimate').value = s.estimateAmount || '';
+      document.getElementById('site-cost').value = s.cost || '';
+      document.getElementById('site-address').value = s.address || '';
+      document.getElementById('site-notes').value = s.notes || '';
+    }
+  } else {
+    sel.value = companyFilter || '';
+    document.getElementById('site-name').value = '';
+    document.getElementById('site-status').value = '見積中';
+    document.getElementById('site-estimate').value = '';
+    document.getElementById('site-cost').value = '';
+    document.getElementById('site-address').value = '';
+    document.getElementById('site-notes').value = '';
+  }
+  openModal('modal-site');
+}
+
+function saveSite() {
+  const companyId = document.getElementById('site-company-id').value;
+  const name = document.getElementById('site-name').value.trim();
+  if (!companyId) { showToast('会社を選択してください', 'warning'); return; }
+  if (!name) { showToast('現場名を入力してください', 'warning'); return; }
+
+  const editId = document.getElementById('site-edit-id').value;
+  const now = new Date().toISOString();
+
+  if (editId) {
+    const s = appData.sites.find(x => x.id === editId);
+    if (s) {
+      s.companyId = companyId;
+      s.name = name;
+      s.status = document.getElementById('site-status').value;
+      s.estimateAmount = parseAmount(document.getElementById('site-estimate').value);
+      s.cost = parseAmount(document.getElementById('site-cost').value);
+      s.address = document.getElementById('site-address').value.trim();
+      s.notes = document.getElementById('site-notes').value.trim();
+      s.updatedAt = now;
+    }
+    showToast('現場情報を更新しました', 'success');
+  } else {
+    const newSite = {
+      id: generateId(),
+      companyId,
+      name,
+      status: document.getElementById('site-status').value,
+      estimateAmount: parseAmount(document.getElementById('site-estimate').value),
+      cost: parseAmount(document.getElementById('site-cost').value),
+      address: document.getElementById('site-address').value.trim(),
+      notes: document.getElementById('site-notes').value.trim(),
+      pdfs: [],
+      driveFolderId: '',
+      driveFolderLink: '',
+      createdAt: now,
+      updatedAt: now,
+    };
+    appData.sites.push(newSite);
+    showToast('現場を追加しました', 'success');
+    saveData();
+    closeModal('modal-site');
+    navigateTo('site-detail', newSite.id);
+    return;
+  }
+
+  saveData();
+  closeModal('modal-site');
+  if (currentPage === 'site-detail') renderSiteDetail();
+  else renderSites();
+}
+
+function confirmDeleteSite(id) {
+  const s = appData.sites.find(x => x.id === id);
+  showConfirm(
+    `「${s?.name}」を削除しますか？`,
+    'PDFのリンク情報も削除されます。Google Drive上のファイルは削除されません。',
+    () => {
+      appData.sites = appData.sites.filter(x => x.id !== id);
+      saveData();
+      navigateTo('sites');
+      showToast('現場を削除しました');
+    }
+  );
+}
+
+// ====================================================================
+// PDF アップロード
+// ====================================================================
+
+function startPdfUpload(siteId) {
+  const fileInput = document.getElementById('pdf-file-input');
+  fileInput.onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    fileInput.value = '';
+    ensureAuth(() => doUpload(siteId, file));
+  };
+  fileInput.click();
+}
+
+async function doUpload(siteId, file) {
+  const site = appData.sites.find(s => s.id === siteId);
+  if (!site) return;
+
+  const progressArea = document.getElementById('upload-progress-area');
+  const uploadBtn = document.getElementById('upload-btn');
+  if (!progressArea) return; // 画面が変わった
+
+  uploadBtn.disabled = true;
+  uploadBtn.innerHTML = `<span class="spinner-inline"></span> アップロード中`;
+
+  function showProg(msg, pct) {
+    progressArea.innerHTML = `
+      <div style="padding:0 16px 12px;">
+        <div class="progress-label">${msg}</div>
+        <div class="progress-bar"><div class="progress-fill" style="width:${pct||5}%"></div></div>
+      </div>`;
+  }
+
+  try {
+    const folderId = await ensureFolderHierarchy(siteId, showProg);
+
+    const timestamp = new Date().toISOString().slice(0,10);
+    const safeName = file.name.replace(/[/\\?%*:|"<>]/g, '-');
+    const fileName = `${timestamp}_${safeName}`;
+
+    const uploaded = await uploadFileToDrive(file, folderId, fileName, showProg);
+
+    if (!site.pdfs) site.pdfs = [];
+    site.pdfs.unshift({
+      id: generateId(),
+      name: uploaded.name,
+      fileId: uploaded.id,
+      webViewLink: uploaded.webViewLink,
+      uploadedAt: new Date().toISOString(),
+    });
+    site.updatedAt = new Date().toISOString();
+    saveData();
+    showToast('PDFをGoogle Driveにアップロードしました！', 'success');
+    renderSiteDetail();
+  } catch (err) {
+    console.error('Upload error:', err);
+    progressArea.innerHTML = '';
+    if (uploadBtn) {
+      uploadBtn.disabled = false;
+      uploadBtn.innerHTML = `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg> PDFをアップロード`;
+    }
+    if (err.message === 'TOKEN_EXPIRED') {
+      showToast('セッションが切れました。再ログインしてください。', 'warning');
+      pendingAction = () => doUpload(siteId, file);
+      login();
+    } else {
+      showToast('アップロード失敗: ' + err.message, 'danger');
+    }
+  }
+}
+
+function confirmDeletePdf(siteId, index) {
+  const site = appData.sites.find(s => s.id === siteId);
+  const pdf = site?.pdfs?.[index];
+  showConfirm(
+    `「${pdf?.name}」を削除しますか？`,
+    'アプリ上のリンクが削除されます。Google Drive上のファイルは削除されません。',
+    () => {
+      site.pdfs.splice(index, 1);
+      saveData();
+      renderSiteDetail();
+      showToast('PDFリンクを削除しました');
+    }
+  );
+}
+
+// ====================================================================
+// 設定操作
+// ====================================================================
+
+function saveClientId() {
+  const val = document.getElementById('input-client-id').value.trim();
+  appData.settings.clientId = val;
+  saveData();
+  tokenClient = null; // 再初期化
+  showToast('Client IDを保存しました', 'success');
+  updateAuthUI();
+}
+
+function resetRootFolder() {
+  showConfirm(
+    'フォルダIDをリセットしますか？',
+    '次回アップロード時に同名フォルダがDriveに存在すれば再利用されます。なければ新規作成されます。',
+    () => {
+      appData.settings.rootFolderId = '';
+      appData.companies.forEach(c => { c.driveFolderId = ''; });
+      appData.sites.forEach(s => { s.driveFolderId = ''; s.driveFolderLink = ''; });
+      saveData();
+      renderSettings();
+      showToast('フォルダIDをリセットしました');
+    }
+  );
+}
+
+function exportData() {
+  const blob = new Blob([JSON.stringify(appData, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `usGlass_backup_${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('バックアップをダウンロードしました', 'success');
+}
+
+function importData(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (!data.companies || !data.sites) throw new Error('形式が不正です');
+      showConfirm(
+        'データを復元しますか？',
+        `会社${data.companies.length}件・現場${data.sites.length}件が読み込まれます。現在のデータは上書きされます。`,
+        () => {
+          appData = data;
+          if (!appData.settings) appData.settings = { clientId: '', rootFolderId: '' };
+          saveData();
+          renderSettings();
+          showToast('データを復元しました', 'success');
+          navigateTo('home');
+        }
+      );
+    } catch(err) {
+      showToast('JSONの読み込みに失敗しました: ' + err.message, 'danger');
+    }
+  };
+  reader.readAsText(file);
+  input.value = '';
+}
+
+function confirmDeleteAll() {
+  showConfirm(
+    'すべてのデータを削除しますか？',
+    '会社・現場・PDFリンクがすべて削除されます。この操作は取り消せません。',
+    () => {
+      appData = { companies: [], sites: [], settings: appData.settings };
+      saveData();
+      showToast('データを削除しました');
+      navigateTo('home');
+    }
+  );
+}
+
+// ====================================================================
+// モーダル
+// ====================================================================
+
+function openModal(id) {
+  document.getElementById(id).classList.add('show');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeModal(id) {
+  document.getElementById(id).classList.remove('show');
+  document.body.style.overflow = '';
+}
+
+function showConfirm(title, message, onOk, okLabel) {
+  document.getElementById('confirm-title').textContent = title;
+  document.getElementById('confirm-message').textContent = message;
+  const btn = document.getElementById('confirm-ok-btn');
+  btn.textContent = okLabel || '削除';
+  btn.onclick = () => { closeModal('modal-confirm'); onOk(); };
+  openModal('modal-confirm');
+}
+
+// モーダル外クリックで閉じる
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeModal(overlay.id);
+  });
+});
+
+// ====================================================================
+// トースト通知
+// ====================================================================
+
+function showToast(message, type) {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = 'toast' + (type ? ' ' + type : '');
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 3000);
+}
+
+// ====================================================================
+// ユーティリティ
+// ====================================================================
+
+function esc(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// ====================================================================
+// 初期化
+// ====================================================================
+
+function init() {
+  // GISライブラリのロードを待ちつつClient IDがあればプリロード
+  if (appData.settings.clientId) {
+    const tryInit = () => {
+      if (window.google?.accounts?.oauth2) {
+        initTokenClient();
+      } else {
+        setTimeout(tryInit, 500);
+      }
+    };
+    setTimeout(tryInit, 800);
+  }
+
+  updateAuthUI();
+  navigateTo('home');
+}
+
+// DOMContentLoaded 後に起動
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
+</script>
+</body>
+</html>
