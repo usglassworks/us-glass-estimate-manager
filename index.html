@@ -753,6 +753,26 @@
   </div>
 </div>
 
+<!-- Handoff Fill Modal: 会社名・現場名の補完入力 -->
+<div class="modal-overlay" id="modal-handoff-fill">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <h3 class="modal-title">取り込み先の確認・入力</h3>
+      <button class="modal-close" onclick="closeModal('modal-handoff-fill')">✕</button>
+    </div>
+    <p style="font-size:14px;color:var(--text-muted);line-height:1.6;margin-bottom:16px;">
+      会社名・現場名が入力されていない見積があります。<br>
+      取り込み先を確認・入力してから実行してください。
+    </p>
+    <div id="handoff-fill-items"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('modal-handoff-fill')">キャンセル</button>
+      <button class="btn btn-primary" onclick="confirmHandoffFill()">取り込む</button>
+    </div>
+  </div>
+</div>
+
 <!-- ===== TOAST ===== -->
 <div id="toast-container"></div>
 
@@ -791,6 +811,7 @@ let currentPage = 'home';
 let currentSiteId = null;
 let companyFilter = null;      // sites ページのフィルター
 let pendingUploadIndex = null; // pendingPdfs内のアップロード対象インデックス
+let handoffItemsBuffer = [];   // 補完モーダル用一時バッファ
 
 // ====================================================================
 // データ管理
@@ -1913,7 +1934,7 @@ function dismissHandoff() {
   showToast('見積データを無視しました');
 }
 
-// 取り込みボタン：配列の全件を一括処理して会社・現場を作成/更新
+// 取り込みボタン：完備チェック → 補完モーダルまたは即時実行
 function importHandoff() {
   const raw = localStorage.getItem(HANDOFF_KEY);
   if (!raw) return;
@@ -1930,25 +1951,110 @@ function importHandoff() {
 
   if (!items.length) { localStorage.removeItem(HANDOFF_KEY); return; }
 
+  // 会社名・現場名が空のエントリが1件でもあれば補完モーダルへ
+  const hasIncomplete = items.some(
+    d => !(d.companyName || '').trim() || !(d.siteName || '').trim()
+  );
+  if (hasIncomplete) {
+    openHandoffFillModal(items);
+  } else {
+    executeImport(items);
+  }
+}
+
+// 補完モーダルを開く（全件の会社名・現場名を入力欄付きで表示）
+function openHandoffFillModal(items) {
+  handoffItemsBuffer = items.map(d => ({ ...d }));
+
+  document.getElementById('handoff-fill-items').innerHTML = items.map((d, i) => {
+    const missingCompany = !(d.companyName || '').trim();
+    const missingSite    = !(d.siteName    || '').trim();
+    const hasIssue       = missingCompany || missingSite;
+    const meta = [
+      d.estimateType   ? esc(d.estimateType)         : '',
+      d.estimateAmount ? formatYen(d.estimateAmount)  : '',
+    ].filter(Boolean).join('・');
+
+    return `<div style="margin-bottom:14px;padding:14px;border-radius:10px;border:1.5px solid ${hasIssue ? '#fed7aa' : 'var(--border)'};background:${hasIssue ? '#fff7ed' : '#f9fafb'};">
+      ${meta ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">${meta}</div>` : ''}
+      <div class="form-group" style="margin-bottom:10px;">
+        <label class="form-label">
+          会社名 *${missingCompany ? ' <span style="color:#dc2626;font-weight:700;">← 入力してください</span>' : ''}
+        </label>
+        <input type="text" class="form-input" id="hf-company-${i}"
+          value="${esc(d.companyName || '')}"
+          placeholder="例：山田建設株式会社"
+          autocomplete="off"
+          style="${missingCompany ? 'border-color:#f97316;' : ''}">
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label">
+          現場名 *${missingSite ? ' <span style="color:#dc2626;font-weight:700;">← 入力してください</span>' : ''}
+        </label>
+        <input type="text" class="form-input" id="hf-site-${i}"
+          value="${esc(d.siteName || '')}"
+          placeholder="例：新宿マンション新築工事"
+          autocomplete="off"
+          style="${missingSite ? 'border-color:#f97316;' : ''}">
+      </div>
+      ${d.pdfFileName ? `<div style="font-size:12px;color:var(--text-muted);margin-top:8px;">📄 ${esc(d.pdfFileName)}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  openModal('modal-handoff-fill');
+
+  // 最初の空欄にフォーカス（iPhoneはポップアップキーボードが出るので任意）
+  const first = document.querySelector('#handoff-fill-items input[style*="border-color:#f97316"]');
+  if (first) setTimeout(() => first.focus(), 300);
+}
+
+// 補完モーダルの「取り込む」ボタン
+function confirmHandoffFill() {
+  // モーダル入力値をバッファに反映
+  const filledItems = handoffItemsBuffer.map((d, i) => ({
+    ...d,
+    companyName: (document.getElementById(`hf-company-${i}`)?.value || '').trim() || (d.companyName || ''),
+    siteName:    (document.getElementById(`hf-site-${i}`)?.value    || '').trim() || (d.siteName    || ''),
+  }));
+
+  // 再バリデーション
+  const emptyIdx = filledItems.findIndex(
+    d => !(d.companyName || '').trim() || !(d.siteName || '').trim()
+  );
+  if (emptyIdx !== -1) {
+    showToast('会社名・現場名をすべて入力してください', 'warning');
+    // 空欄のある入力欄にスクロール
+    document.getElementById(`hf-company-${emptyIdx}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+
+  closeModal('modal-handoff-fill');
+  executeImport(filledItems);
+}
+
+// 実際の取り込み処理（バリデーション済み items を受け取る）
+function executeImport(items) {
   const now = new Date().toISOString();
   let newCount    = 0;
   let updateCount = 0;
-  let lastSiteId  = null;
+  let lastSite    = null; // { id, companyName, siteName }
 
   for (const data of items) {
     const companyName = (data.companyName || '').trim();
     const siteName    = (data.siteName    || '').trim();
-    if (!companyName || !siteName) continue; // 必須項目なしはスキップ
+    if (!companyName || !siteName) continue; // 念のため空は安全スキップ
 
-    // 会社を検索（完全一致）、なければ新規作成
-    let company = appData.companies.find(c => c.name === companyName);
+    // 会社を検索：①完全一致 → ②両端空白を除去して再比較 → ③新規作成
+    let company = appData.companies.find(c => c.name === companyName)
+               || appData.companies.find(c => c.name.trim() === companyName);
     if (!company) {
       company = { id: generateId(), name: companyName, createdAt: now };
       appData.companies.push(company);
     }
 
-    // 現場を検索（同会社内で完全一致）、なければ新規作成
-    let site = appData.sites.find(s => s.companyId === company.id && s.name === siteName);
+    // 現場を検索：①完全一致 → ②両端空白を除去して再比較 → ③新規作成
+    let site = appData.sites.find(s => s.companyId === company.id && s.name === siteName)
+            || appData.sites.find(s => s.companyId === company.id && s.name.trim() === siteName);
     if (!site) {
       site = {
         id: generateId(),
@@ -1987,22 +2093,25 @@ function importHandoff() {
       }
     }
 
-    lastSiteId = site.id;
+    lastSite = { id: site.id, companyName, siteName };
   }
 
   saveData();
-  localStorage.removeItem(HANDOFF_KEY);
+  localStorage.removeItem(HANDOFF_KEY); // 取り込み完了 → キーを削除
 
-  const parts = [];
-  if (newCount    > 0) parts.push(`${newCount}件の現場を新規作成`);
-  if (updateCount > 0) parts.push(`${updateCount}件の現場を更新`);
-  showToast(parts.length ? parts.join('・') + 'しました' : '取り込み完了', 'success');
-
-  // 1件なら現場詳細へ、複数件なら現場一覧へ
-  if (items.length === 1 && lastSiteId) {
-    navigateTo('site-detail', lastSiteId);
+  // トースト：「〇〇会社 / 〇〇現場 に取り込みました」
+  const validCount = items.filter(d => (d.companyName || '').trim() && (d.siteName || '').trim()).length;
+  if (lastSite && validCount === 1) {
+    showToast(`${lastSite.companyName} / ${lastSite.siteName} に取り込みました`, 'success');
+  } else if (lastSite) {
+    showToast(`${validCount}件を取り込みました（最後: ${lastSite.companyName} / ${lastSite.siteName}）`, 'success');
   } else {
-    navigateTo('sites');
+    showToast('取り込み完了', 'success');
+  }
+
+  // 常に現場詳細へ遷移
+  if (lastSite) {
+    navigateTo('site-detail', lastSite.id);
   }
 }
 
