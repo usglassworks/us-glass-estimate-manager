@@ -1847,45 +1847,58 @@ function esc(str) {
 // 積算ツール連携（ハンドオフ）
 // ====================================================================
 
-// ホーム画面のバナー表示
+// ホーム画面のバナー表示（配列対応）
 // 期待するlocalStorageフォーマット（積算ツール側が書き込む）:
-// {
-//   companyName: "山田建設株式会社",
-//   siteName: "新宿マンション工事",
-//   estimateAmount: 1500000,   // 円（整数）
-//   cost: 1000000,             // 円（整数）
-//   profit: 500000,            // 円（整数、省略可）
-//   estimateType: "ガラス工事", // 省略可
-//   pdfFileName: "見積書_新宿.pdf" // ファイル名のみ（本体なし）
-// }
+// [
+//   {
+//     companyName: "山田建設株式会社",
+//     siteName: "新宿マンション工事",
+//     estimateAmount: 1500000,   // 円（整数）
+//     cost: 1000000,             // 円（整数）
+//     estimateType: "ガラス工事", // 省略可
+//     pdfFileName: "見積書_新宿.pdf" // ファイル名のみ（本体なし）省略可
+//   },
+//   { ... }  // 複数件対応
+// ]
+// ※ 後方互換のため、オブジェクト単体での書き込みも受け付ける
 function checkHandoff() {
   const el = document.getElementById('handoff-notice');
   if (!el) return;
   const raw = localStorage.getItem(HANDOFF_KEY);
   if (!raw) { el.innerHTML = ''; return; }
 
-  let data;
-  try { data = JSON.parse(raw); } catch {
+  let items;
+  try {
+    const parsed = JSON.parse(raw);
+    items = Array.isArray(parsed) ? parsed : [parsed];
+    if (!items.length) { localStorage.removeItem(HANDOFF_KEY); el.innerHTML = ''; return; }
+  } catch {
     localStorage.removeItem(HANDOFF_KEY);
     el.innerHTML = '';
     return;
   }
 
-  const companyText = esc(data.companyName || '（会社名なし）');
-  const siteText    = esc(data.siteName    || '（現場名なし）');
-  const amountText  = data.estimateAmount ? '・' + formatYen(data.estimateAmount) : '';
-  const typeText    = data.estimateType   ? '・' + esc(data.estimateType) : '';
+  const count    = items.length;
+  const title    = count === 1 ? '積算ツールから未登録見積があります' : `積算ツールから ${count} 件の未登録見積があります`;
+  const btnLabel = count === 1 ? '取り込む' : 'すべて取り込む';
+
+  const listHtml = items.slice(0, 3).map(d => {
+    const cn = esc(d.companyName || '（会社名なし）');
+    const sn = esc(d.siteName    || '（現場名なし）');
+    const am = d.estimateAmount ? '・' + formatYen(d.estimateAmount) : '';
+    const tp = d.estimateType   ? '・' + esc(d.estimateType) : '';
+    return `<div class="handoff-banner-sub">${cn} / ${sn}${am}${tp}</div>`;
+  }).join('') + (count > 3 ? `<div class="handoff-banner-sub">… 他 ${count - 3} 件</div>` : '');
 
   el.innerHTML = `
     <div class="handoff-banner">
       <div class="handoff-banner-icon">📥</div>
       <div class="handoff-banner-body">
-        <div class="handoff-banner-title">積算ツールから未登録見積があります</div>
-        <div class="handoff-banner-sub">${companyText} / ${siteText}${amountText}${typeText}</div>
-        ${data.pdfFileName ? `<div class="handoff-banner-sub" style="margin-top:2px;">PDF: ${esc(data.pdfFileName)}</div>` : ''}
+        <div class="handoff-banner-title">${title}</div>
+        ${listHtml}
       </div>
       <div class="handoff-banner-actions">
-        <button class="btn btn-primary btn-sm" onclick="importHandoff()">取り込む</button>
+        <button class="btn btn-primary btn-sm" onclick="importHandoff()">${btnLabel}</button>
         <button class="btn btn-secondary btn-sm" onclick="dismissHandoff()">無視</button>
       </div>
     </div>
@@ -1900,86 +1913,97 @@ function dismissHandoff() {
   showToast('見積データを無視しました');
 }
 
-// 取り込みボタン：会社・現場を検索 or 新規作成してデータを保存
+// 取り込みボタン：配列の全件を一括処理して会社・現場を作成/更新
 function importHandoff() {
   const raw = localStorage.getItem(HANDOFF_KEY);
   if (!raw) return;
 
-  let data;
-  try { data = JSON.parse(raw); } catch {
+  let items;
+  try {
+    const parsed = JSON.parse(raw);
+    items = Array.isArray(parsed) ? parsed : [parsed];
+  } catch {
     localStorage.removeItem(HANDOFF_KEY);
     showToast('データの読み込みに失敗しました', 'danger');
     return;
   }
 
-  const companyName = (data.companyName || '').trim();
-  const siteName    = (data.siteName    || '').trim();
-  if (!companyName || !siteName) {
-    showToast('会社名または現場名が含まれていません', 'danger');
-    localStorage.removeItem(HANDOFF_KEY);
-    return;
-  }
+  if (!items.length) { localStorage.removeItem(HANDOFF_KEY); return; }
 
   const now = new Date().toISOString();
+  let newCount    = 0;
+  let updateCount = 0;
+  let lastSiteId  = null;
 
-  // 会社を検索（完全一致）、なければ新規作成
-  let company = appData.companies.find(c => c.name === companyName);
-  const isNewCompany = !company;
-  if (!company) {
-    company = { id: generateId(), name: companyName, createdAt: now };
-    appData.companies.push(company);
-  }
+  for (const data of items) {
+    const companyName = (data.companyName || '').trim();
+    const siteName    = (data.siteName    || '').trim();
+    if (!companyName || !siteName) continue; // 必須項目なしはスキップ
 
-  // 現場を検索（同会社内で完全一致）、なければ新規作成
-  let site = appData.sites.find(s => s.companyId === company.id && s.name === siteName);
-  const isNewSite = !site;
-  if (!site) {
-    site = {
-      id: generateId(),
-      companyId: company.id,
-      name: siteName,
-      status: '見積中',
-      estimateAmount: 0,
-      cost: 0,
-      estimateType: '',
-      address: '',
-      notes: '',
-      pdfs: [],
-      pendingPdfs: [],
-      driveFolderId: '',
-      driveFolderLink: '',
-      createdAt: now,
-      updatedAt: now,
-    };
-    appData.sites.push(site);
-  } else {
-    if (!site.pendingPdfs) site.pendingPdfs = [];
-  }
-
-  // 見積データを上書き（既存現場でも積算ツールの値が最新）
-  if (data.estimateAmount != null) site.estimateAmount = parseInt(data.estimateAmount) || 0;
-  if (data.cost != null)           site.cost           = parseInt(data.cost)           || 0;
-  if (data.estimateType)           site.estimateType   = data.estimateType;
-  site.updatedAt = now;
-
-  // PDFファイル名を pendingPdfs に登録（本体なし・重複チェックあり）
-  if (data.pdfFileName) {
-    if (!site.pendingPdfs.find(p => p.name === data.pdfFileName)) {
-      site.pendingPdfs.push({ name: data.pdfFileName, receivedAt: now });
+    // 会社を検索（完全一致）、なければ新規作成
+    let company = appData.companies.find(c => c.name === companyName);
+    if (!company) {
+      company = { id: generateId(), name: companyName, createdAt: now };
+      appData.companies.push(company);
     }
+
+    // 現場を検索（同会社内で完全一致）、なければ新規作成
+    let site = appData.sites.find(s => s.companyId === company.id && s.name === siteName);
+    if (!site) {
+      site = {
+        id: generateId(),
+        companyId: company.id,
+        name: siteName,
+        status: '見積中',
+        estimateAmount: 0,
+        cost: 0,
+        estimateType: '',
+        address: '',
+        notes: '',
+        pdfs: [],
+        pendingPdfs: [],
+        driveFolderId: '',
+        driveFolderLink: '',
+        createdAt: now,
+        updatedAt: now,
+      };
+      appData.sites.push(site);
+      newCount++;
+    } else {
+      if (!site.pendingPdfs) site.pendingPdfs = [];
+      updateCount++;
+    }
+
+    // 見積データを上書き（積算ツールの値が常に最新）
+    if (data.estimateAmount != null) site.estimateAmount = parseInt(data.estimateAmount) || 0;
+    if (data.cost != null)           site.cost           = parseInt(data.cost)           || 0;
+    if (data.estimateType)           site.estimateType   = data.estimateType;
+    site.updatedAt = now;
+
+    // PDFファイル名を pendingPdfs に登録（本体なし・重複チェックあり）
+    if (data.pdfFileName) {
+      if (!site.pendingPdfs.find(p => p.name === data.pdfFileName)) {
+        site.pendingPdfs.push({ name: data.pdfFileName, receivedAt: now });
+      }
+    }
+
+    lastSiteId = site.id;
   }
 
   saveData();
   localStorage.removeItem(HANDOFF_KEY);
 
-  const msg = isNewCompany
-    ? `会社「${companyName}」と現場「${siteName}」を新規作成しました`
-    : isNewSite
-    ? `既存会社に現場「${siteName}」を新規作成しました`
-    : `現場「${siteName}」の見積データを更新しました`;
-  showToast(msg, 'success');
+  const parts = [];
+  if (newCount    > 0) parts.push(`${newCount}件の現場を新規作成`);
+  if (updateCount > 0) parts.push(`${updateCount}件の現場を更新`);
+  showToast(parts.length ? parts.join('・') + 'しました' : '取り込み完了', 'success');
 
-  navigateTo('site-detail', site.id);
+  // 1件なら現場詳細へ、複数件なら現場一覧へ
+  if (items.length === 1 && lastSiteId) {
+    navigateTo('site-detail', lastSiteId);
+  } else {
+    navigateTo('sites');
+  }
 }
 
 // pendingPdfs専用アップロード起動（完了後に対象エントリを自動削除）
