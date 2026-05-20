@@ -680,8 +680,9 @@
       <div class="settings-item">
         <div class="settings-label">Google Driveでデータ同期</div>
         <p class="settings-desc" style="line-height:1.7;">
-          同じGoogleアカウントでログインした iPhone・iPad・MacBook 間で、会社・現場データを共有できます。<br>
-          保存先: Drive ▸ US_GLASS_見積管理 ▸ _data ▸ manager_data.json
+          同じGoogleアカウントでログインした iPhone・iPad・MacBook 間でデータを共有できます。<br>
+          保存先: Drive ▸ US_GLASS_見積管理 ▸ _data ▸ manager_data.json<br>
+          <span style="color:#b45309;">⚠ Drive APIが使えない場合は「データ管理」のJSONダウンロード／インポートを使用してください。</span>
         </p>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;">
           <button class="btn btn-primary btn-sm" id="btn-sync-save" onclick="syncSaveToDrive()">
@@ -694,6 +695,10 @@
           </button>
         </div>
         <div id="sync-status" style="margin-top:10px;font-size:13px;"></div>
+      </div>
+      <div class="settings-item" style="background:#f9fafb;border-radius:8px;padding:10px 14px;margin:0 -16px;">
+        <div style="font-size:12px;color:var(--text-muted);font-weight:600;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em;">バックアップ・同期状況</div>
+        <div id="sync-combined-status" style="font-size:13px;line-height:2;color:var(--text-muted);">読み込み中...</div>
       </div>
     </div>
 
@@ -2130,35 +2135,47 @@ function formatBackupAge(isoDate) {
 }
 
 function updateBackupStatus() {
-  const lastBackup = localStorage.getItem(BACKUP_KEY);
-  const age        = formatBackupAge(lastBackup);
-  const diffDays   = lastBackup ? Math.floor((Date.now() - new Date(lastBackup).getTime()) / 86400000) : null;
-  const isWarn     = diffDays === null || diffDays >= 7;
+  const lastBackup  = localStorage.getItem(BACKUP_KEY);
+  const syncMeta    = getSyncMeta();
+  const lastSync    = syncMeta.lastSyncAt || null;
+  const age         = formatBackupAge(lastBackup);
+  const diffDays    = lastBackup ? Math.floor((Date.now() - new Date(lastBackup).getTime()) / 86400000) : null;
+  const isWarn      = diffDays === null || diffDays >= 7;
 
   // ホーム画面
   const homeEl = document.getElementById('home-backup-status');
   if (homeEl) {
-    if (lastBackup) {
-      const dt = new Date(lastBackup).toLocaleString('ja-JP', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' });
-      if (isWarn) {
-        homeEl.innerHTML = `
-          <div style="background:#fefce8;border:1px solid #fde047;border-radius:8px;padding:9px 14px;margin-bottom:10px;display:flex;align-items:center;gap:8px;font-size:13px;">
-            <span style="font-size:16px;">⚠️</span>
-            <span><strong>バックアップ未実施</strong>（最終: ${dt} / ${age}）<br>
-            <a href="javascript:void(0)" onclick="navigateTo('settings')" style="color:var(--primary);text-decoration:underline;">設定画面でバックアップ</a></span>
-          </div>`;
-      } else {
-        homeEl.innerHTML = `
-          <div style="font-size:12px;color:var(--text-muted);text-align:right;margin-bottom:6px;">
-            最終バックアップ: ${age}（${dt}）
-          </div>`;
-      }
-    } else {
+    const syncLine = lastSync
+      ? `最終同期: ${new Date(lastSync).toLocaleString('ja-JP', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' })}（${formatBackupAge(lastSync)}）`
+      : '未同期';
+
+    if (!lastBackup) {
       homeEl.innerHTML = `
         <div style="background:#fff7ed;border:1px solid #fdba74;border-radius:8px;padding:9px 14px;margin-bottom:10px;display:flex;align-items:center;gap:8px;font-size:13px;">
           <span style="font-size:16px;">⚠️</span>
-          <span><strong>バックアップがありません</strong><br>
-          <a href="javascript:void(0)" onclick="navigateTo('settings')" style="color:var(--primary);text-decoration:underline;">設定画面でバックアップを取得してください</a></span>
+          <div>
+            <div><strong>バックアップがありません</strong></div>
+            <div style="margin-top:2px;color:#92400e;">Drive同期: ${syncLine}</div>
+            <a href="javascript:void(0)" onclick="navigateTo('settings')" style="color:var(--primary);text-decoration:underline;font-size:12px;">設定画面でバックアップを取得してください</a>
+          </div>
+        </div>`;
+    } else if (isWarn) {
+      const dt = new Date(lastBackup).toLocaleString('ja-JP', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' });
+      homeEl.innerHTML = `
+        <div style="background:#fefce8;border:1px solid #fde047;border-radius:8px;padding:9px 14px;margin-bottom:10px;display:flex;align-items:center;gap:8px;font-size:13px;">
+          <span style="font-size:16px;">⚠️</span>
+          <div>
+            <div><strong>7日以上バックアップされていません</strong>（${dt} / ${age}）</div>
+            <div style="margin-top:2px;color:#92400e;font-size:12px;">Drive同期: ${syncLine}</div>
+            <a href="javascript:void(0)" onclick="navigateTo('settings')" style="color:var(--primary);text-decoration:underline;font-size:12px;">JSONバックアップを保存してください</a>
+          </div>
+        </div>`;
+    } else {
+      const dt = new Date(lastBackup).toLocaleString('ja-JP', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' });
+      homeEl.innerHTML = `
+        <div style="font-size:12px;color:var(--text-muted);text-align:right;margin-bottom:6px;line-height:1.8;">
+          最終バックアップ: ${age}（${dt}）<br>
+          Drive同期: ${syncLine}
         </div>`;
     }
   }
@@ -2167,7 +2184,7 @@ function updateBackupStatus() {
   const settEl = document.getElementById('last-backup-info');
   if (settEl) {
     if (lastBackup) {
-      const dt   = new Date(lastBackup).toLocaleString('ja-JP');
+      const dt    = new Date(lastBackup).toLocaleString('ja-JP');
       const color = isWarn ? '#b91c1c' : 'var(--text-muted)';
       settEl.innerHTML = `<span style="color:${color};">最終バックアップ: ${dt}（${age}）</span>`;
     } else {
@@ -2182,12 +2199,15 @@ function exportData() {
   const ts  = now.toISOString();
   const fileName = `usglass_manager_backup_${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}.json`;
 
+  const syncMeta  = getSyncMeta();
   const exportObj = {
-    appVersion:  APP_VERSION,
-    exportedAt:  ts,
-    companies:   appData.companies,
-    sites:       appData.sites,
-    settings:    appData.settings,
+    appVersion:    APP_VERSION,
+    exportedAt:    ts,
+    lastBackupAt:  ts,
+    lastSyncAt:    syncMeta.lastSyncAt || null,
+    companies:     appData.companies,
+    sites:         appData.sites,        // pdfs・status・見積金額・税率・見積日を含む
+    settings:      appData.settings,
   };
 
   const blob = new Blob([JSON.stringify(exportObj, null, 2)], { type: 'application/json' });
@@ -2221,14 +2241,16 @@ function importData(input) {
 
       // 確認モーダルにプレビューを直接セット
       document.getElementById('confirm-title').textContent = 'データを復元しますか？';
+      const appVer = data.appVersion ? `v${esc(data.appVersion)}` : '不明';
       document.getElementById('confirm-message').innerHTML = `
         <div style="background:#f9fafb;border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;line-height:2;">
           <div><strong>バックアップ作成日時:</strong> ${esc(exportedAt)}</div>
           <div><strong>会社数:</strong> ${companies.length}件</div>
           <div><strong>現場数:</strong> ${sites.length}件</div>
           <div><strong>PDFリンク数:</strong> ${pdfCount}件</div>
+          <div><strong>appVersion:</strong> ${appVer}</div>
         </div>
-        <div style="color:#b91c1c;font-size:13px;font-weight:600;">⚠ 現在のデータはすべて上書きされます。</div>`;
+        <div style="color:#b91c1c;font-size:13px;font-weight:600;">⚠ この端末の管理アプリデータを、読み込んだJSONデータで上書きします。</div>`;
       const btn = document.getElementById('confirm-ok-btn');
       btn.textContent = '復元する';
       btn.style.background = 'var(--primary)';
@@ -2918,14 +2940,32 @@ async function downloadDriveFileContent(fileId) {
 // 同期ステータス UI を更新（設定画面）
 function updateSyncStatus() {
   const meta = getSyncMeta();
-  const el   = document.getElementById('sync-status');
-  if (!el) return;
-  if (meta.lastSyncAt) {
-    const dt  = new Date(meta.lastSyncAt).toLocaleString('ja-JP');
-    const age = formatBackupAge(meta.lastSyncAt);
-    el.innerHTML = `<span style="color:var(--text-muted);">最終同期: ${dt}（${age}）</span>`;
-  } else {
-    el.innerHTML = `<span style="color:var(--text-muted);">未同期</span>`;
+
+  // 同期ボタン下の個別ステータス
+  const el = document.getElementById('sync-status');
+  if (el) {
+    if (meta.lastSyncAt) {
+      const dt  = new Date(meta.lastSyncAt).toLocaleString('ja-JP');
+      const age = formatBackupAge(meta.lastSyncAt);
+      el.innerHTML = `<span style="color:var(--text-muted);">最終同期: ${dt}（${age}）</span>`;
+    } else {
+      el.innerHTML = `<span style="color:var(--text-muted);">未同期</span>`;
+    }
+  }
+
+  // バックアップ・同期の統合ステータスエリア
+  const combined = document.getElementById('sync-combined-status');
+  if (combined) {
+    const lastBackup  = localStorage.getItem(BACKUP_KEY);
+    const backupStr   = lastBackup
+      ? new Date(lastBackup).toLocaleString('ja-JP') + `（${formatBackupAge(lastBackup)}）`
+      : '<span style="color:#b91c1c;">なし</span>';
+    const syncStr     = meta.lastSyncAt
+      ? new Date(meta.lastSyncAt).toLocaleString('ja-JP') + `（${formatBackupAge(meta.lastSyncAt)}）`
+      : '未同期';
+    combined.innerHTML = `
+      <div>最終バックアップ: ${backupStr}</div>
+      <div>最終Drive同期: ${syncStr}</div>`;
   }
 }
 
@@ -2969,7 +3009,7 @@ async function syncSaveToDrive() {
       pendingAction = syncSaveToDrive;
       login();
     } else {
-      showToast('同期保存失敗: ' + err.message, 'danger');
+      showToast(`Drive API同期に失敗しました。JSONバックアップを使用してください。（${err.message}）`, 'danger');
       updateSyncStatus();
     }
   } finally {
@@ -3065,7 +3105,7 @@ async function _doSyncLoad() {
       pendingAction = _doSyncLoad;
       login();
     } else {
-      showToast('同期読み込み失敗: ' + err.message, 'danger');
+      showToast(`Drive API同期に失敗しました。JSONバックアップを使用してください。（${err.message}）`, 'danger');
       updateSyncStatus();
     }
   } finally {
