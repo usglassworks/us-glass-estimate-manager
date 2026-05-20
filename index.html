@@ -676,6 +676,28 @@
     </div>
 
     <div class="card">
+      <div class="card-header"><span class="card-title">☁ クラウド同期</span></div>
+      <div class="settings-item">
+        <div class="settings-label">Google Driveでデータ同期</div>
+        <p class="settings-desc" style="line-height:1.7;">
+          同じGoogleアカウントでログインした iPhone・iPad・MacBook 間で、会社・現場データを共有できます。<br>
+          保存先: Drive ▸ US_GLASS_見積管理 ▸ _data ▸ manager_data.json
+        </p>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;">
+          <button class="btn btn-primary btn-sm" id="btn-sync-save" onclick="syncSaveToDrive()">
+            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+            Driveへ同期保存
+          </button>
+          <button class="btn btn-secondary btn-sm" id="btn-sync-load" onclick="syncLoadFromDrive()">
+            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 11l3 3m0 0l3-3m-3 3V3"/></svg>
+            Driveから同期読み込み
+          </button>
+        </div>
+        <div id="sync-status" style="margin-top:10px;font-size:13px;"></div>
+      </div>
+    </div>
+
+    <div class="card">
       <div class="card-header"><span class="card-title">データ管理</span></div>
       <div class="settings-item">
         <div class="settings-label">バックアップ（JSONエクスポート）</div>
@@ -944,6 +966,7 @@ const DRIVE_API = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
 const HANDOFF_KEY = 'usGlassEstimateHandoff'; // 積算ツールとの受け渡しキー
 const BACKUP_KEY  = 'usGlassLastBackup';       // 最終バックアップ日時
+const SYNC_META_KEY = 'usGlassSyncMeta';       // 同期メタ {fileId, folderId, lastSyncAt}
 const APP_VERSION = '1.1';
 
 // ---- ステート ----
@@ -1713,6 +1736,7 @@ function renderSettings() {
     rootInfo.textContent = '未設定（初回アップロード時に自動作成）';
   }
   updateBackupStatus();
+  updateSyncStatus();
 }
 
 // ====================================================================
@@ -2815,6 +2839,242 @@ function setSummaryModeMonth(m) {
 // ====================================================================
 // 初期化
 // ====================================================================
+
+// ====================================================================
+// クラウド同期（Google Drive ↔ localStorage）
+// ====================================================================
+
+function getSyncMeta() {
+  try { return JSON.parse(localStorage.getItem(SYNC_META_KEY) || '{}'); } catch { return {}; }
+}
+function saveSyncMeta(meta) {
+  localStorage.setItem(SYNC_META_KEY, JSON.stringify(meta));
+}
+
+// US_GLASS_見積管理/_data フォルダを取得または作成して ID を返す
+async function getOrCreateSyncFolder() {
+  const meta = getSyncMeta();
+  if (meta.folderId) return meta.folderId;
+
+  if (!appData.settings.rootFolderId) {
+    const root = await getOrCreateFolder('US_GLASS_見積管理', 'root');
+    appData.settings.rootFolderId = root.id;
+    saveData();
+  }
+  const dataFolder = await getOrCreateFolder('_data', appData.settings.rootFolderId);
+  saveSyncMeta({ ...meta, folderId: dataFolder.id });
+  return dataFolder.id;
+}
+
+// JSON ファイルを Drive に作成（POST）または上書き（PATCH）
+async function uploadOrUpdateJsonFile(folderId, existingFileId, fileName, jsonObj) {
+  const jsonStr  = JSON.stringify(jsonObj, null, 2);
+  const blob     = new Blob([jsonStr], { type: 'application/json' });
+  const metadata = existingFileId
+    ? { name: fileName }
+    : { name: fileName, parents: [folderId] };
+
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+  form.append('file', blob);
+
+  const url    = existingFileId
+    ? `${DRIVE_UPLOAD}/files/${existingFileId}?uploadType=multipart&fields=id,name`
+    : `${DRIVE_UPLOAD}/files?uploadType=multipart&fields=id,name`;
+  const method = existingFileId ? 'PATCH' : 'POST';
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, url);
+    xhr.setRequestHeader('Authorization', `Bearer ${accessToken}`);
+    xhr.onload = () => {
+      if (xhr.status === 401) { accessToken = null; tokenExpiry = 0; reject(new Error('TOKEN_EXPIRED')); return; }
+      if (xhr.status >= 200 && xhr.status < 300) { resolve(JSON.parse(xhr.responseText)); return; }
+      let msg = `Drive API ${xhr.status}`;
+      try { msg = JSON.parse(xhr.responseText).error?.message || msg; } catch {}
+      const err = new Error(msg);
+      if (xhr.status === 404) err.status = 404;
+      reject(err);
+    };
+    xhr.onerror = () => reject(new Error('ネットワークエラー'));
+    xhr.send(form);
+  });
+}
+
+// Drive ファイルの内容（JSON）を取得
+async function downloadDriveFileContent(fileId) {
+  const res = await fetch(`${DRIVE_API}/files/${fileId}?alt=media`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  if (res.status === 401) { accessToken = null; tokenExpiry = 0; throw new Error('TOKEN_EXPIRED'); }
+  if (!res.ok) {
+    const e = new Error((await res.json().catch(() => ({}))).error?.message || `Drive API ${res.status}`);
+    if (res.status === 404) e.status = 404;
+    throw e;
+  }
+  return res.json();
+}
+
+// 同期ステータス UI を更新（設定画面）
+function updateSyncStatus() {
+  const meta = getSyncMeta();
+  const el   = document.getElementById('sync-status');
+  if (!el) return;
+  if (meta.lastSyncAt) {
+    const dt  = new Date(meta.lastSyncAt).toLocaleString('ja-JP');
+    const age = formatBackupAge(meta.lastSyncAt);
+    el.innerHTML = `<span style="color:var(--text-muted);">最終同期: ${dt}（${age}）</span>`;
+  } else {
+    el.innerHTML = `<span style="color:var(--text-muted);">未同期</span>`;
+  }
+}
+
+// ===== Driveへ同期保存 =====
+async function syncSaveToDrive() {
+  if (!isLoggedIn()) { ensureAuth(syncSaveToDrive); return; }
+
+  const btn      = document.getElementById('btn-sync-save');
+  const statusEl = document.getElementById('sync-status');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-inline"></span> 保存中...'; }
+  if (statusEl) statusEl.innerHTML = '<span style="color:var(--text-muted);">Driveへ保存中...</span>';
+
+  const now = new Date().toISOString();
+  const syncData = {
+    appVersion: APP_VERSION,
+    savedAt:    now,
+    companies:  appData.companies,
+    sites:      appData.sites,
+    settings:   appData.settings,
+    lastSyncAt: now,
+  };
+
+  try {
+    const meta     = getSyncMeta();
+    const folderId = await getOrCreateSyncFolder();
+    let result;
+    try {
+      result = await uploadOrUpdateJsonFile(folderId, meta.fileId || null, 'manager_data.json', syncData);
+    } catch(err) {
+      if (err.status === 404) {
+        result = await uploadOrUpdateJsonFile(folderId, null, 'manager_data.json', syncData);
+      } else { throw err; }
+    }
+    saveSyncMeta({ ...getSyncMeta(), fileId: result.id, folderId, lastSyncAt: now });
+    updateSyncStatus();
+    showToast('Driveへ同期保存しました ✓', 'success');
+  } catch(err) {
+    console.error('Sync save error:', err);
+    if (err.message === 'TOKEN_EXPIRED') {
+      showToast('再ログインが必要です', 'warning');
+      pendingAction = syncSaveToDrive;
+      login();
+    } else {
+      showToast('同期保存失敗: ' + err.message, 'danger');
+      updateSyncStatus();
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg> Driveへ同期保存';
+    }
+  }
+}
+
+// ===== Driveから同期読み込み =====
+function syncLoadFromDrive() {
+  showConfirm(
+    'Driveから読み込みますか？',
+    'Drive上の管理データでこの端末のデータを上書きします。読み込み前に現在のデータを自動バックアップします。',
+    () => {
+      _autoBackupBeforeSync(); // ユーザー操作のコールスタック内でダウンロード実行
+      ensureAuth(_doSyncLoad);
+    },
+    '読み込む'
+  );
+}
+
+function _autoBackupBeforeSync() {
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const ts  = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}`;
+  const obj = {
+    appVersion: APP_VERSION,
+    exportedAt: now.toISOString(),
+    note:       '同期読み込み前の自動バックアップ',
+    companies:  appData.companies,
+    sites:      appData.sites,
+    settings:   appData.settings,
+  };
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = `usglass_auto_backup_before_sync_${ts}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function _doSyncLoad() {
+  const btn      = document.getElementById('btn-sync-load');
+  const statusEl = document.getElementById('sync-status');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-inline"></span> 読み込み中...'; }
+  if (statusEl) statusEl.innerHTML = '<span style="color:var(--text-muted);">Driveから読み込み中...</span>';
+
+  try {
+    const meta   = getSyncMeta();
+    let fileId   = meta.fileId;
+
+    if (!fileId) {
+      const folderId = await getOrCreateSyncFolder();
+      const q   = `name='manager_data.json' and '${folderId}' in parents and trashed=false`;
+      const res = await driveGet(`/files?q=${encodeURIComponent(q)}&fields=files(id)&spaces=drive`);
+      if (!res.files?.length) {
+        throw new Error('Driveに同期データが見つかりません。まず「Driveへ同期保存」を実行してください。');
+      }
+      fileId = res.files[0].id;
+      saveSyncMeta({ ...meta, fileId });
+    }
+
+    let data;
+    try {
+      data = await downloadDriveFileContent(fileId);
+    } catch(err) {
+      if (err.status === 404) {
+        saveSyncMeta({ ...getSyncMeta(), fileId: null });
+        throw new Error('Driveの同期ファイルが見つかりません。まず「Driveへ同期保存」を実行してください。');
+      }
+      throw err;
+    }
+    if (!data.companies || !data.sites) throw new Error('同期データの形式が不正です');
+
+    const now = new Date().toISOString();
+    appData = {
+      companies: data.companies || [],
+      sites:     data.sites     || [],
+      settings:  data.settings  || appData.settings || { clientId: '', rootFolderId: '' },
+    };
+    saveData();
+    saveSyncMeta({ ...getSyncMeta(), lastSyncAt: now });
+
+    showToast('Driveからデータを読み込みました ✓', 'success');
+    updateSyncStatus();
+    navigateTo('home');
+  } catch(err) {
+    console.error('Sync load error:', err);
+    if (err.message === 'TOKEN_EXPIRED') {
+      showToast('再ログインが必要です', 'warning');
+      pendingAction = _doSyncLoad;
+      login();
+    } else {
+      showToast('同期読み込み失敗: ' + err.message, 'danger');
+      updateSyncStatus();
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 11l3 3m0 0l3-3m-3 3V3"/></svg> Driveから同期読み込み';
+    }
+  }
+}
 
 function init() {
   // GISライブラリのロードを待ちつつClient IDがあればプリロード
