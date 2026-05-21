@@ -875,6 +875,45 @@
   </div>
 </div>
 
+<!-- Delete Company Modal -->
+<div class="modal-overlay" id="modal-delete-company">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <h3 class="modal-title" style="color:#dc2626;">⚠️ 会社を削除</h3>
+      <button class="modal-close" onclick="closeModal('modal-delete-company')">✕</button>
+    </div>
+    <!-- Backup notice -->
+    <div style="background:#fef3c7;border:1.5px solid #f59e0b;border-radius:10px;padding:12px 14px;margin-bottom:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <span style="font-size:13px;color:#92400e;flex:1;min-width:160px;">削除前にJSONバックアップを保存することをおすすめします。</span>
+      <button class="btn btn-sm" onclick="exportData()" style="background:#f59e0b;color:white;border:none;white-space:nowrap;flex-shrink:0;">
+        <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" style="margin-right:4px;vertical-align:-2px;"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+        JSONバックアップを作成
+      </button>
+    </div>
+    <!-- Company info -->
+    <div id="dc-company-info" style="margin-bottom:14px;"></div>
+    <!-- Site list -->
+    <div id="dc-sites-info" style="display:none;margin-bottom:14px;background:#fef2f2;border:1.5px solid #fecaca;border-radius:10px;padding:12px 14px;">
+      <div id="dc-sites-summary" style="font-size:13px;font-weight:700;color:#dc2626;margin-bottom:8px;"></div>
+      <div id="dc-sites-list" style="font-size:13px;color:#7f1d1d;line-height:1.8;margin-bottom:8px;"></div>
+      <p style="font-size:12px;color:#991b1b;margin:0;">削除すると、これらの現場データとPDFリンク情報も管理アプリ上から削除されます。<br>ただし、Google Drive上のPDF本体は削除しません。</p>
+    </div>
+    <!-- Name confirmation input -->
+    <div style="margin-bottom:4px;">
+      <label class="form-label" style="color:#dc2626;font-weight:700;">確認のため、会社名を入力してください</label>
+      <div id="dc-name-hint" style="font-size:12px;color:var(--text-muted);margin-bottom:6px;"></div>
+      <input type="text" id="dc-confirm-name" class="form-input" placeholder="会社名を入力..." autocomplete="off"
+             oninput="updateDeleteCompanyBtn()" style="border-color:#fecaca;">
+      <div id="dc-name-error" style="display:none;font-size:12px;color:#dc2626;margin-top:4px;">会社名が一致しません</div>
+    </div>
+    <div class="modal-actions" style="margin-top:16px;">
+      <button class="btn btn-secondary" onclick="closeModal('modal-delete-company')">キャンセル</button>
+      <button class="btn btn-danger" id="dc-delete-btn" disabled onclick="executeDeleteCompany()" style="opacity:0.5;">削除する</button>
+    </div>
+  </div>
+</div>
+
 <!-- Confirm Modal -->
 <div class="modal-overlay" id="modal-confirm">
   <div class="modal">
@@ -1541,8 +1580,11 @@ function renderCompanies() {
         <div class="list-item-sub">${siteCount}件の現場${c.contact ? '・' + esc(c.contact) : ''}</div>
       </div>
       <div class="list-item-right">
-        <button class="btn btn-secondary btn-sm btn-icon" onclick="event.stopPropagation();openCompanyModal('${c.id}')">
+        <button class="btn btn-secondary btn-sm btn-icon" onclick="event.stopPropagation();openCompanyModal('${c.id}')" title="編集">
           <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </button>
+        <button class="btn btn-sm btn-icon" onclick="event.stopPropagation();openDeleteCompanyModal('${c.id}')" title="削除" style="background:#fee2e2;color:#dc2626;border:1.5px solid #fecaca;">
+          <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
         </button>
         <svg class="chevron" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>
       </div>
@@ -1857,21 +1899,84 @@ function saveCompany() {
   renderCompanies();
 }
 
-function confirmDeleteCompany(id) {
-  const c = appData.companies.find(x => x.id === id);
-  const siteCount = appData.sites.filter(s => s.companyId === id).length;
-  showConfirm(
-    `「${c?.name}」を削除しますか？`,
-    siteCount > 0 ? `この会社に紐づく${siteCount}件の現場も削除されます。` : 'この操作は取り消せません。',
-    () => {
-      appData.companies = appData.companies.filter(x => x.id !== id);
-      appData.sites = appData.sites.filter(s => s.companyId !== id);
-      saveData();
-      renderCompanies();
-      showToast('会社を削除しました');
-    }
-  );
+let _deleteCompanyTargetId = null;
+
+function openDeleteCompanyModal(id) {
+  const company = appData.companies.find(x => x.id === id);
+  if (!company) return;
+  _deleteCompanyTargetId = id;
+
+  const sites = appData.sites.filter(s => s.companyId === id);
+  const pdfCount = sites.reduce((sum, s) => sum + (s.pdfs?.length || 0), 0);
+
+  // Company info block
+  document.getElementById('dc-company-info').innerHTML =
+    `<div style="font-size:15px;font-weight:700;margin-bottom:4px;">${esc(company.name)}</div>` +
+    (company.contact ? `<div style="font-size:13px;color:var(--text-muted);">担当：${esc(company.contact)}</div>` : '');
+
+  // Sites block
+  const sitesBlock = document.getElementById('dc-sites-info');
+  if (sites.length > 0) {
+    document.getElementById('dc-sites-summary').textContent =
+      `現場数：${sites.length}件　PDFリンク：${pdfCount}件`;
+    document.getElementById('dc-sites-list').innerHTML =
+      '<div style="font-weight:600;margin-bottom:4px;">現場一覧：</div>' +
+      sites.map(s => `<div>・${esc(s.name)}</div>`).join('');
+    sitesBlock.style.display = '';
+  } else {
+    sitesBlock.style.display = 'none';
+  }
+
+  // Name hint and input
+  document.getElementById('dc-name-hint').textContent = `「${company.name}」と入力してください`;
+  const inp = document.getElementById('dc-confirm-name');
+  inp.value = '';
+  document.getElementById('dc-name-error').style.display = 'none';
+  const btn = document.getElementById('dc-delete-btn');
+  btn.disabled = true;
+  btn.style.opacity = '0.5';
+
+  openModal('modal-delete-company');
+  setTimeout(() => inp.focus(), 300);
 }
+
+function updateDeleteCompanyBtn() {
+  const company = appData.companies.find(x => x.id === _deleteCompanyTargetId);
+  if (!company) return;
+  const val = document.getElementById('dc-confirm-name').value;
+  const match = val === company.name;
+  const btn = document.getElementById('dc-delete-btn');
+  btn.disabled = !match;
+  btn.style.opacity = match ? '1' : '0.5';
+  document.getElementById('dc-name-error').style.display =
+    val.length > 0 && !match ? '' : 'none';
+}
+
+function executeDeleteCompany() {
+  const id = _deleteCompanyTargetId;
+  const company = appData.companies.find(x => x.id === id);
+  if (!company) return;
+
+  // Verify name matches
+  const inputVal = document.getElementById('dc-confirm-name').value;
+  if (inputVal !== company.name) {
+    document.getElementById('dc-name-error').style.display = '';
+    return;
+  }
+
+  const name = company.name;
+  appData.companies = appData.companies.filter(x => x.id !== id);
+  appData.sites     = appData.sites.filter(s => s.companyId !== id);
+  saveData();
+  closeModal('modal-delete-company');
+  _deleteCompanyTargetId = null;
+  navigateTo('companies');
+  renderCompanies();
+  showToast(`${name}を削除しました`, 'success');
+}
+
+// Legacy alias kept for compatibility (e.g. old callsites if any)
+function confirmDeleteCompany(id) { openDeleteCompanyModal(id); }
 
 // ====================================================================
 // 現場 CRUD
