@@ -2371,7 +2371,8 @@ function checkHandoff() {
   let items;
   try {
     const parsed = JSON.parse(raw);
-    items = Array.isArray(parsed) ? parsed : [parsed];
+    const all    = Array.isArray(parsed) ? parsed : [parsed];
+    items = all.filter(d => d.processed !== true); // processed:true は除外
     if (!items.length) { localStorage.removeItem(HANDOFF_KEY); el.innerHTML = ''; return; }
   } catch {
     localStorage.removeItem(HANDOFF_KEY);
@@ -2386,8 +2387,11 @@ function checkHandoff() {
   const listHtml = items.slice(0, 3).map(d => {
     const cn = esc(d.companyName || '（会社名なし）');
     const sn = esc(d.siteName    || '（現場名なし）');
-    const am = d.estimateAmount ? '・' + formatYen(d.estimateAmount) : '';
-    const tp = d.estimateType   ? '・' + esc(d.estimateType) : '';
+    // 税込 → 税抜 → 旧estimateAmount の優先順で表示
+    const amVal = d.estimateAmountTaxIncluded ?? d.estimateAmountTaxExcluded ?? d.estimateAmount;
+    const amLabel = d.estimateAmountTaxIncluded ? '税込' : d.estimateAmountTaxExcluded ? '税抜' : '';
+    const am  = amVal ? `・${amLabel ? amLabel + ' ' : ''}${formatYen(amVal)}` : '';
+    const tp  = d.estimateType ? '・' + esc(d.estimateType) : '';
     return `<div class="handoff-banner-sub">${cn} / ${sn}${am}${tp}</div>`;
   }).join('') + (count > 3 ? `<div class="handoff-banner-sub">… 他 ${count - 3} 件</div>` : '');
 
@@ -2414,7 +2418,7 @@ function dismissHandoff() {
   showToast('見積データを無視しました');
 }
 
-// 取り込みボタン：完備チェック → 補完モーダルまたは即時実行
+// 取り込みボタン：processed:falseのみ取り出し → 補完モーダルまたは即時実行
 function importHandoff() {
   const raw = localStorage.getItem(HANDOFF_KEY);
   if (!raw) return;
@@ -2422,7 +2426,8 @@ function importHandoff() {
   let items;
   try {
     const parsed = JSON.parse(raw);
-    items = Array.isArray(parsed) ? parsed : [parsed];
+    const all    = Array.isArray(parsed) ? parsed : [parsed];
+    items        = all.filter(d => d.processed !== true); // 未処理のみ
   } catch {
     localStorage.removeItem(HANDOFF_KEY);
     showToast('データの読み込みに失敗しました', 'danger');
@@ -2450,9 +2455,12 @@ function openHandoffFillModal(items) {
     const missingCompany = !(d.companyName || '').trim();
     const missingSite    = !(d.siteName    || '').trim();
     const hasIssue       = missingCompany || missingSite;
+    // 税込→税抜→estimateAmount の優先順で金額表示
+    const amVal  = d.estimateAmountTaxIncluded ?? d.estimateAmountTaxExcluded ?? d.estimateAmount;
+    const amLabel = d.estimateAmountTaxIncluded ? '税込' : d.estimateAmountTaxExcluded ? '税抜' : '';
     const meta = [
-      d.estimateType   ? esc(d.estimateType)         : '',
-      d.estimateAmount ? formatYen(d.estimateAmount)  : '',
+      d.estimateType ? esc(d.estimateType) : '',
+      amVal ? `${amLabel ? amLabel + ' ' : ''}${formatYen(amVal)}` : '',
     ].filter(Boolean).join('・');
 
     return `<div style="margin-bottom:14px;padding:14px;border-radius:10px;border:1.5px solid ${hasIssue ? '#fed7aa' : 'var(--border)'};background:${hasIssue ? '#fff7ed' : '#f9fafb'};">
@@ -2560,17 +2568,49 @@ function executeImport(items) {
       updateCount++;
     }
 
-    // 見積データを上書き（積算ツールのestimateAmountは税込として扱う）
-    if (data.estimateAmount != null) {
-      const taxRate = data.taxRate || site.taxRate || 10;
-      const tf = calcTaxFields(parseInt(data.estimateAmount) || 0, taxRate);
-      site.estimateAmount            = tf.included;
-      site.estimateAmountTaxIncluded = tf.included;
-      site.estimateAmountTaxExcluded = tf.excluded;
-      site.taxAmount = tf.taxAmt;
+    // ── 見積金額の取り込み（優先順: 税込+税抜セット → 税込のみ → 税抜のみ → estimateAmount）
+    const taxRate = parseInt(data.taxRate) || site.taxRate || 10;
+    let taxIncluded = null, taxExcluded = null, taxAmt = null;
+
+    if (data.estimateAmountTaxIncluded != null && data.estimateAmountTaxExcluded != null) {
+      // 両方渡ってきた場合はそのまま使用
+      taxIncluded = parseInt(data.estimateAmountTaxIncluded) || 0;
+      taxExcluded = parseInt(data.estimateAmountTaxExcluded) || 0;
+      taxAmt      = taxIncluded - taxExcluded;
+    } else if (data.estimateAmountTaxIncluded != null) {
+      // 税込のみ → 税率から税抜を逆算
+      taxIncluded = parseInt(data.estimateAmountTaxIncluded) || 0;
+      const tf    = calcTaxFields(taxIncluded, taxRate);
+      taxExcluded = tf.excluded;
+      taxAmt      = tf.taxAmt;
+    } else if (data.estimateAmountTaxExcluded != null) {
+      // 税抜のみ → 税率から税込を計算
+      taxExcluded = parseInt(data.estimateAmountTaxExcluded) || 0;
+      taxIncluded = Math.round(taxExcluded * (1 + taxRate / 100));
+      taxAmt      = taxIncluded - taxExcluded;
+    } else if (data.estimateAmount != null) {
+      // 旧フォーマット: estimateAmount を税込として扱い逆算
+      const tf    = calcTaxFields(parseInt(data.estimateAmount) || 0, taxRate);
+      taxIncluded = tf.included;
+      taxExcluded = tf.excluded;
+      taxAmt      = tf.taxAmt;
+    }
+
+    if (taxIncluded !== null) {
+      site.estimateAmount            = taxIncluded;
+      site.estimateAmountTaxIncluded = taxIncluded;
+      site.estimateAmountTaxExcluded = taxExcluded;
+      site.taxAmount = taxAmt;
       site.taxRate   = taxRate;
     }
-    if (data.cost != null) site.cost = parseInt(data.cost) || 0;
+
+    // 原価・粗利（cost 優先、なければ netProfit から逆算）
+    if (data.cost != null) {
+      site.cost = parseInt(data.cost) || 0;
+    } else if (data.netProfit != null && taxIncluded !== null) {
+      // netProfit = 税込 − 原価 として扱い原価を逆算
+      site.cost = Math.max(0, taxIncluded - (parseInt(data.netProfit) || 0));
+    }
     if (data.estimateType) site.estimateType = data.estimateType;
     if (data.estimateDate) site.estimateDate = data.estimateDate;
     site.updatedAt = now;
