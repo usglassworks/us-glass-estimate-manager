@@ -593,6 +593,12 @@
   <!-- HOME PAGE -->
   <div class="page active" id="page-home">
     <div id="handoff-notice"></div>
+    <div style="text-align:right;margin-bottom:2px;">
+      <button class="btn btn-outline btn-sm" onclick="openHandoffImportModal()" style="font-size:12px;padding:5px 10px;">
+        <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+        積算データを手動取り込み
+      </button>
+    </div>
     <div id="home-login-notice"></div>
     <div id="home-backup-status"></div>
     <div class="stats-grid" id="stats-grid"></div>
@@ -881,6 +887,57 @@
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal('modal-confirm')">キャンセル</button>
       <button class="btn btn-danger" id="confirm-ok-btn">削除</button>
+    </div>
+  </div>
+</div>
+
+<!-- Handoff Manual Import Modal -->
+<div class="modal-overlay" id="modal-handoff-import">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <h3 class="modal-title">積算データを手動取り込み</h3>
+      <button class="modal-close" onclick="closeModal('modal-handoff-import')">✕</button>
+    </div>
+    <p style="font-size:13px;color:var(--text-muted);line-height:1.6;margin-bottom:14px;">
+      Safari・PWAで自動連携が動作しない場合はこちらから取り込みできます。
+    </p>
+    <!-- Tab -->
+    <div style="display:flex;border:1.5px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px;">
+      <button id="hi-tab-paste" onclick="switchHandoffImportTab('paste')"
+        style="flex:1;padding:9px;font-size:13px;font-weight:600;border:none;cursor:pointer;background:var(--primary);color:white;">
+        📋 JSONを貼り付け
+      </button>
+      <button id="hi-tab-file" onclick="switchHandoffImportTab('file')"
+        style="flex:1;padding:9px;font-size:13px;font-weight:600;border:none;cursor:pointer;background:white;color:var(--text-muted);">
+        📂 ファイルを選択
+      </button>
+    </div>
+    <!-- Paste area -->
+    <div id="hi-paste-area">
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:8px;">積算ツールでコピーしたJSONを貼り付けてください。</p>
+      <textarea id="hi-json-text" class="form-textarea" rows="6"
+        placeholder='{"companyName":"山田建設","siteName":"〇〇現場","estimateAmountTaxIncluded":363000,...}'
+        style="font-size:12px;font-family:monospace;"></textarea>
+      <div id="hi-paste-error" style="display:none;" class="pdf-upload-error"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeModal('modal-handoff-import')">キャンセル</button>
+        <button class="btn btn-primary" onclick="executeHandoffPaste()">取り込む</button>
+      </div>
+    </div>
+    <!-- File area -->
+    <div id="hi-file-area" style="display:none;">
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">積算ツールからダウンロードしたJSONファイルを選択してください。</p>
+      <input type="file" id="hi-file-input" accept=".json,application/json"
+             style="display:none;" onchange="executeHandoffFile(this)">
+      <label for="hi-file-input" class="pdf-file-label">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+        JSONファイルを選択
+      </label>
+      <div id="hi-file-error" style="display:none;margin-top:10px;" class="pdf-upload-error"></div>
+      <div class="modal-actions" style="margin-top:16px;">
+        <button class="btn btn-secondary" onclick="closeModal('modal-handoff-import')">キャンセル</button>
+      </div>
     </div>
   </div>
 </div>
@@ -2427,7 +2484,7 @@ function importHandoff() {
   try {
     const parsed = JSON.parse(raw);
     const all    = Array.isArray(parsed) ? parsed : [parsed];
-    items        = all.filter(d => d.processed !== true); // 未処理のみ
+    items        = all.filter(d => d.processed !== true);
   } catch {
     localStorage.removeItem(HANDOFF_KEY);
     showToast('データの読み込みに失敗しました', 'danger');
@@ -2435,16 +2492,7 @@ function importHandoff() {
   }
 
   if (!items.length) { localStorage.removeItem(HANDOFF_KEY); return; }
-
-  // 会社名・現場名が空のエントリが1件でもあれば補完モーダルへ
-  const hasIncomplete = items.some(
-    d => !(d.companyName || '').trim() || !(d.siteName || '').trim()
-  );
-  if (hasIncomplete) {
-    openHandoffFillModal(items);
-  } else {
-    executeImport(items);
-  }
+  _handleHandoffItems(items);
 }
 
 // 補完モーダルを開く（全件の会社名・現場名を入力欄付きで表示）
@@ -3156,7 +3204,113 @@ async function _doSyncLoad() {
   }
 }
 
+// ── Manual Handoff Import ──────────────────────────────────────────────────
+
+function openHandoffImportModal() {
+  // Reset state
+  document.getElementById('hi-json-text').value = '';
+  const pasteErr = document.getElementById('hi-paste-error');
+  if (pasteErr) { pasteErr.style.display = 'none'; pasteErr.textContent = ''; }
+  const fileErr = document.getElementById('hi-file-error');
+  if (fileErr) { fileErr.style.display = 'none'; fileErr.textContent = ''; }
+  const fileInput = document.getElementById('hi-file-input');
+  if (fileInput) fileInput.value = '';
+  // Default to paste tab
+  switchHandoffImportTab('paste');
+  openModal('modal-handoff-import');
+}
+
+function switchHandoffImportTab(tab) {
+  const pasteArea = document.getElementById('hi-paste-area');
+  const fileArea  = document.getElementById('hi-file-area');
+  const pasteBtn  = document.getElementById('hi-tab-paste');
+  const fileBtn   = document.getElementById('hi-tab-file');
+  if (tab === 'paste') {
+    pasteArea.style.display = '';
+    fileArea.style.display  = 'none';
+    pasteBtn.style.background = 'var(--primary)';
+    pasteBtn.style.color      = 'white';
+    fileBtn.style.background  = 'white';
+    fileBtn.style.color       = 'var(--text-muted)';
+  } else {
+    pasteArea.style.display = 'none';
+    fileArea.style.display  = '';
+    fileBtn.style.background  = 'var(--primary)';
+    fileBtn.style.color       = 'white';
+    pasteBtn.style.background = 'white';
+    pasteBtn.style.color      = 'var(--text-muted)';
+  }
+}
+
+function _parseHandoffText(text) {
+  const trimmed = text.trim();
+  if (!trimmed) throw new Error('テキストが空です');
+  const parsed = JSON.parse(trimmed);
+  const all = Array.isArray(parsed) ? parsed : [parsed];
+  const items = all.filter(d => d && d.processed !== true);
+  if (!items.length) throw new Error('未処理の取り込みデータがありません（processed:true のみ、または空）');
+  return items;
+}
+
+function _handleHandoffItems(items) {
+  closeModal('modal-handoff-import');
+  const hasIncomplete = items.some(
+    d => !(d.companyName || '').trim() || !(d.siteName || '').trim()
+  );
+  if (hasIncomplete) {
+    openHandoffFillModal(items);
+  } else {
+    executeImport(items);
+  }
+}
+
+function executeHandoffPaste() {
+  const text = document.getElementById('hi-json-text').value;
+  const errEl = document.getElementById('hi-paste-error');
+  try {
+    const items = _parseHandoffText(text);
+    errEl.style.display = 'none';
+    _handleHandoffItems(items);
+  } catch (e) {
+    errEl.textContent = 'エラー: ' + (e.message || 'JSONの解析に失敗しました');
+    errEl.style.display = '';
+  }
+}
+
+function executeHandoffFile(input) {
+  const errEl = document.getElementById('hi-file-error');
+  if (!input.files || !input.files[0]) return;
+  const file = input.files[0];
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const items = _parseHandoffText(e.target.result);
+      errEl.style.display = 'none';
+      _handleHandoffItems(items);
+    } catch (err) {
+      errEl.textContent = 'エラー: ' + (err.message || 'JSONの解析に失敗しました');
+      errEl.style.display = '';
+    }
+    input.value = '';
+  };
+  reader.onerror = function() {
+    errEl.textContent = 'ファイルの読み込みに失敗しました';
+    errEl.style.display = '';
+    input.value = '';
+  };
+  reader.readAsText(file);
+}
+
+// ── Default Client ID ───────────────────────────────────────────────────────
+const DEFAULT_CLIENT_ID = '447526128143-2g4cdenfgcvmd7pmf6le1uruddg0a4im.apps.googleusercontent.com';
+
 function init() {
+  // Set default Client ID if not configured
+  if (!appData.settings.clientId) {
+    appData.settings.clientId = DEFAULT_CLIENT_ID;
+    saveData();
+  }
+
   // GISライブラリのロードを待ちつつClient IDがあればプリロード
   if (appData.settings.clientId) {
     const tryInit = () => {
