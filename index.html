@@ -600,6 +600,7 @@
       </button>
     </div>
     <div id="home-login-notice"></div>
+    <div id="home-sync-banner"></div>
     <div id="home-backup-status"></div>
     <div class="stats-grid" id="stats-grid"></div>
     <div id="home-month-summary"></div>
@@ -703,8 +704,9 @@
         <div id="sync-status" style="margin-top:10px;font-size:13px;"></div>
       </div>
       <div class="settings-item" style="background:#f9fafb;border-radius:8px;padding:10px 14px;margin:0 -16px;">
-        <div style="font-size:12px;color:var(--text-muted);font-weight:600;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em;">バックアップ・同期状況</div>
-        <div id="sync-combined-status" style="font-size:13px;line-height:2;color:var(--text-muted);">読み込み中...</div>
+        <div style="font-size:12px;color:var(--text-muted);font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;">同期・バックアップ状況</div>
+        <div id="sync-status-indicator" style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:700;margin-bottom:10px;"></div>
+        <div id="sync-combined-status" style="font-size:13px;line-height:2.1;color:var(--text-muted);">読み込み中...</div>
       </div>
     </div>
 
@@ -871,6 +873,39 @@
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal('modal-site')">キャンセル</button>
       <button class="btn btn-primary" onclick="saveSite()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Drive Newer Prompt Modal -->
+<div class="modal-overlay" id="modal-drive-newer">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <h3 class="modal-title">☁ Driveに新しいデータがあります</h3>
+      <button class="modal-close" onclick="closeModal('modal-drive-newer')">✕</button>
+    </div>
+    <div id="drive-newer-info" style="font-size:13px;color:var(--text-muted);line-height:1.7;margin-bottom:16px;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('modal-drive-newer')">あとで</button>
+      <button class="btn btn-primary" onclick="_acceptDriveLoad()">読み込む</button>
+    </div>
+  </div>
+</div>
+
+<!-- Sync Conflict Modal -->
+<div class="modal-overlay" id="modal-sync-conflict">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <h3 class="modal-title" style="color:#d97706;">⚠ 同期の競合が発生しました</h3>
+      <button class="modal-close" onclick="closeModal('modal-sync-conflict')">✕</button>
+    </div>
+    <div id="sync-conflict-info" style="font-size:13px;color:var(--text-muted);line-height:1.7;margin-bottom:16px;"></div>
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <button class="btn btn-primary" onclick="_conflictChooseLocal()">この端末を優先してDriveへ保存</button>
+      <button class="btn btn-secondary" onclick="_conflictChooseDrive()">Driveのデータを読み込む</button>
+      <button class="btn btn-secondary" onclick="closeModal('modal-sync-conflict')">キャンセル</button>
     </div>
   </div>
 </div>
@@ -1090,6 +1125,9 @@ let summaryMode  = 'monthly';               // 'monthly' | 'yearly'
 let summaryYear  = new Date().getFullYear();
 let summaryMonth = new Date().getMonth() + 1; // 1-12
 let homeTaxMode  = 'included';              // 'included' | 'excluded'
+let autoSyncTimer = null;                   // debounce timer for auto-sync
+let _pendingConflictDriveData = null;       // conflict resolution state
+let _pendingDriveNewerData    = null;       // drive-newer prompt state
 
 // ====================================================================
 // データ管理
@@ -1112,6 +1150,10 @@ function loadData() {
 function saveData() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+    // Record that local data was modified
+    const now = new Date().toISOString();
+    saveSyncMeta({ ...getSyncMeta(), lastLocalUpdateAt: now });
+    scheduleAutoSync();
   } catch(e) {
     showToast('データ保存に失敗しました（ストレージ容量不足の可能性）', 'danger');
   }
@@ -1180,7 +1222,6 @@ function onTokenReceived(resp) {
     return;
   }
   accessToken = resp.access_token;
-  // expires_in は秒。1分のバッファを持たせる
   tokenExpiry = Date.now() + (resp.expires_in - 60) * 1000;
   updateAuthUI();
   showToast('Googleにログインしました', 'success');
@@ -1188,6 +1229,9 @@ function onTokenReceived(resp) {
     const action = pendingAction;
     pendingAction = null;
     action();
+  } else {
+    // No pending action → startup check for newer Drive data
+    checkDriveOnStartup();
   }
 }
 
@@ -1486,6 +1530,7 @@ function renderHome() {
   document.getElementById('home-guide-card').style.display = appData.sites.length > 0 ? 'none' : '';
   renderHomeMonthSummary();
   updateBackupStatus();
+  renderHomeSyncBanner();
 }
 
 // ====================================================================
@@ -3130,39 +3175,232 @@ async function downloadDriveFileContent(fileId) {
   return res.json();
 }
 
-// 同期ステータス UI を更新（設定画面）
+// ===== 同期ステータス UI =====
+
+function _syncFmt(iso) {
+  if (!iso) return null;
+  return new Date(iso).toLocaleString('ja-JP') + `（${formatBackupAge(iso)}）`;
+}
+
+function _getSyncStatusConfig() {
+  if (!appData.settings.clientId) return { label: 'ログインが必要です', bg: '#f3f4f6', color: '#6b7280' };
+  if (!isLoggedIn())              return { label: 'ログインが必要です', bg: '#f3f4f6', color: '#6b7280' };
+  const meta = getSyncMeta();
+  if (!meta.lastSaveToDriveAt)    return { label: '未同期', bg: '#fef3c7', color: '#92400e' };
+  const local = meta.lastLocalUpdateAt || '';
+  const saved = meta.lastSaveToDriveAt || '';
+  if (meta.syncError)             return { label: 'Drive同期エラー', bg: '#fee2e2', color: '#dc2626' };
+  if (local > saved)              return { label: '未同期の変更あり', bg: '#fef3c7', color: '#92400e' };
+  return { label: '同期済み', bg: '#dcfce7', color: '#15803d' };
+}
+
 function updateSyncStatus() {
   const meta = getSyncMeta();
 
-  // 同期ボタン下の個別ステータス
+  // ボタン下の同期行
   const el = document.getElementById('sync-status');
   if (el) {
-    if (meta.lastSyncAt) {
-      const dt  = new Date(meta.lastSyncAt).toLocaleString('ja-JP');
-      const age = formatBackupAge(meta.lastSyncAt);
-      el.innerHTML = `<span style="color:var(--text-muted);">最終同期: ${dt}（${age}）</span>`;
-    } else {
-      el.innerHTML = `<span style="color:var(--text-muted);">未同期</span>`;
-    }
+    const saved = _syncFmt(meta.lastSaveToDriveAt);
+    el.innerHTML = saved
+      ? `<span style="color:var(--text-muted);">最終Drive保存: ${saved}</span>`
+      : `<span style="color:var(--text-muted);">まだDriveに保存されていません</span>`;
   }
 
-  // バックアップ・同期の統合ステータスエリア
+  // ステータスバッジ
+  const indicator = document.getElementById('sync-status-indicator');
+  if (indicator) {
+    const cfg = _getSyncStatusConfig();
+    indicator.style.background = cfg.bg;
+    indicator.style.color      = cfg.color;
+    indicator.textContent      = cfg.label;
+  }
+
+  // 詳細ステータスエリア
   const combined = document.getElementById('sync-combined-status');
   if (combined) {
-    const lastBackup  = localStorage.getItem(BACKUP_KEY);
-    const backupStr   = lastBackup
-      ? new Date(lastBackup).toLocaleString('ja-JP') + `（${formatBackupAge(lastBackup)}）`
-      : '<span style="color:#b91c1c;">なし</span>';
-    const syncStr     = meta.lastSyncAt
-      ? new Date(meta.lastSyncAt).toLocaleString('ja-JP') + `（${formatBackupAge(meta.lastSyncAt)}）`
-      : '未同期';
-    combined.innerHTML = `
-      <div>最終バックアップ: ${backupStr}</div>
-      <div>最終Drive同期: ${syncStr}</div>`;
+    const lastBackup = localStorage.getItem(BACKUP_KEY);
+    const rows = [
+      ['最終同期日時',        meta.lastSyncAt],
+      ['最終Drive保存',       meta.lastSaveToDriveAt],
+      ['最終Drive読み込み',   meta.lastLoadFromDriveAt],
+      ['この端末の最終変更',  meta.lastLocalUpdateAt],
+      ['JSONバックアップ',    lastBackup],
+    ];
+    combined.innerHTML = rows.map(([label, ts]) => {
+      const str = _syncFmt(ts) || '<span style="color:#b91c1c;">なし</span>';
+      return `<div>${label}: ${str}</div>`;
+    }).join('');
+  }
+
+  // ホームバナー更新
+  renderHomeSyncBanner();
+}
+
+function renderHomeSyncBanner() {
+  const el = document.getElementById('home-sync-banner');
+  if (!el) return;
+  const meta = getSyncMeta();
+  if (!isLoggedIn()) { el.innerHTML = ''; return; }
+  const local = meta.lastLocalUpdateAt || '';
+  const saved = meta.lastSaveToDriveAt || '';
+  if (!saved || local > saved) {
+    el.innerHTML = `<div class="alert alert-warning" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <span style="flex:1;min-width:160px;">この端末のデータがDriveより新しい可能性があります。</span>
+      <button class="btn btn-sm btn-primary" style="flex-shrink:0;" onclick="syncSaveToDrive()">Driveへ同期保存</button>
+    </div>`;
+  } else {
+    el.innerHTML = '';
   }
 }
 
-// ===== Driveへ同期保存 =====
+// ===== Drive ファイルのメタ情報取得 =====
+async function _getDriveFileMeta(fileId) {
+  return driveGet(`/files/${fileId}?fields=id,name,modifiedTime`);
+}
+
+// ===== 起動時Drive確認 =====
+async function checkDriveOnStartup() {
+  if (!isLoggedIn()) return;
+  const meta = getSyncMeta();
+  if (!meta.fileId) return; // まだ一度も同期していない
+
+  try {
+    const fileMeta  = await _getDriveFileMeta(meta.fileId);
+    const driveTime = fileMeta.modifiedTime; // ISO string
+    const localTime = meta.lastLocalUpdateAt || '';
+    const savedTime = meta.lastSaveToDriveAt || '';
+
+    const driveIsNewer = driveTime > (savedTime || '');
+    const localIsNewer = localTime > (savedTime || '');
+
+    if (driveIsNewer && localIsNewer) {
+      // 競合：両方新しい
+      const driveData = await downloadDriveFileContent(meta.fileId);
+      _pendingConflictDriveData = { data: driveData, driveTime };
+      const driveStr = new Date(driveTime).toLocaleString('ja-JP');
+      const localStr = localTime ? new Date(localTime).toLocaleString('ja-JP') : '不明';
+      document.getElementById('sync-conflict-info').innerHTML =
+        `この端末とDriveの両方に新しい変更があります。どちらを優先しますか？<br><br>` +
+        `<div style="font-size:12px;background:#f9fafb;padding:8px;border-radius:6px;line-height:1.8;">` +
+        `Drive更新日時: ${driveStr}<br>この端末の変更: ${localStr}</div>`;
+      openModal('modal-sync-conflict');
+    } else if (driveIsNewer) {
+      // Driveのみ新しい
+      const driveData = await downloadDriveFileContent(meta.fileId);
+      _pendingDriveNewerData = { data: driveData, driveTime };
+      const driveStr = new Date(driveTime).toLocaleString('ja-JP');
+      const savedStr = savedTime ? new Date(savedTime).toLocaleString('ja-JP') : '初回';
+      document.getElementById('drive-newer-info').innerHTML =
+        `Drive上に新しい管理データがあります。読み込みますか？<br><br>` +
+        `<div style="font-size:12px;background:#f9fafb;padding:8px;border-radius:6px;line-height:1.8;">` +
+        `Drive更新日時: ${driveStr}<br>前回同期: ${savedStr}` +
+        (driveData.deviceName ? `<br>保存元端末: ${esc(driveData.deviceName)}` : '') +
+        `</div>`;
+      openModal('modal-drive-newer');
+    }
+    // localIsNewer のみの場合は renderHomeSyncBanner() が案内
+    updateSyncStatus();
+  } catch(err) {
+    if (err.message === 'TOKEN_EXPIRED') { accessToken = null; tokenExpiry = 0; }
+    console.warn('checkDriveOnStartup:', err.message);
+    // 起動時チェック失敗はサイレントに（エラートーストは出さない）
+  }
+}
+
+// ===== 競合解決ハンドラ =====
+function _conflictChooseLocal() {
+  closeModal('modal-sync-conflict');
+  _pendingConflictDriveData = null;
+  syncSaveToDrive();
+}
+
+async function _conflictChooseDrive() {
+  const pending = _pendingConflictDriveData;
+  _pendingConflictDriveData = null;
+  closeModal('modal-sync-conflict');
+  if (!pending) return;
+  _applyDriveData(pending.data);
+}
+
+// ===== Driveが新しい場合のハンドラ =====
+function _acceptDriveLoad() {
+  const pending = _pendingDriveNewerData;
+  _pendingDriveNewerData = null;
+  closeModal('modal-drive-newer');
+  if (!pending) return;
+  _autoBackupBeforeSync();
+  _applyDriveData(pending.data);
+}
+
+function _applyDriveData(data) {
+  if (!data.companies || !data.sites) {
+    showToast('同期データの形式が不正です', 'danger');
+    return;
+  }
+  const prev = getSyncMeta();
+  const now  = new Date().toISOString();
+  appData = {
+    companies: data.companies || [],
+    sites:     data.sites     || [],
+    settings:  data.settings  || appData.settings,
+  };
+  // saveData() は lastLocalUpdateAt を更新してしまうため直接保存
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch(e) {}
+  // Mark both local and Drive as in sync (data just came from Drive)
+  saveSyncMeta({ ...prev, lastSyncAt: now, lastSaveToDriveAt: now, lastLoadFromDriveAt: now, lastLocalUpdateAt: now, syncError: false });
+  showToast('Driveからデータを読み込みました ✓', 'success');
+  updateSyncStatus();
+  navigateTo('home');
+}
+
+// ===== 自動同期（10秒デバウンス）=====
+function scheduleAutoSync() {
+  if (autoSyncTimer) clearTimeout(autoSyncTimer);
+  autoSyncTimer = setTimeout(() => {
+    autoSyncTimer = null;
+    if (!isLoggedIn()) return;
+    _doAutoSync();
+  }, 10000);
+}
+
+async function _doAutoSync() {
+  if (!isLoggedIn()) return;
+  try {
+    const meta     = getSyncMeta();
+    const now      = new Date().toISOString();
+    const deviceName = navigator.userAgent.includes('iPhone') ? 'iPhone' :
+                       navigator.userAgent.includes('iPad')   ? 'iPad'   :
+                       navigator.userAgent.includes('Mac')    ? 'Mac'    : 'その他';
+    const syncData = {
+      appVersion: APP_VERSION,
+      updatedAt:  now,
+      deviceName,
+      companies:  appData.companies,
+      sites:      appData.sites,
+      settings:   appData.settings,
+    };
+    const folderId = await getOrCreateSyncFolder();
+    let result;
+    try {
+      result = await uploadOrUpdateJsonFile(folderId, meta.fileId || null, 'manager_data.json', syncData);
+    } catch(err) {
+      if (err.status === 404) {
+        result = await uploadOrUpdateJsonFile(folderId, null, 'manager_data.json', syncData);
+      } else { throw err; }
+    }
+    saveSyncMeta({ ...getSyncMeta(), fileId: result.id, folderId,
+      lastSyncAt: now, lastSaveToDriveAt: now, syncError: false });
+    updateSyncStatus();
+  } catch(err) {
+    if (err.message === 'TOKEN_EXPIRED') { accessToken = null; tokenExpiry = 0; }
+    console.warn('Auto-sync failed:', err.message);
+    saveSyncMeta({ ...getSyncMeta(), syncError: true });
+    updateSyncStatus();
+    showToast('Drive同期に失敗しました。端末内には保存されています。あとで同期してください。', 'warning');
+  }
+}
+
+// ===== Driveへ同期保存（手動）=====
 async function syncSaveToDrive() {
   if (!isLoggedIn()) { ensureAuth(syncSaveToDrive); return; }
 
@@ -3172,13 +3410,16 @@ async function syncSaveToDrive() {
   if (statusEl) statusEl.innerHTML = '<span style="color:var(--text-muted);">Driveへ保存中...</span>';
 
   const now = new Date().toISOString();
+  const deviceName = navigator.userAgent.includes('iPhone') ? 'iPhone' :
+                     navigator.userAgent.includes('iPad')   ? 'iPad'   :
+                     navigator.userAgent.includes('Mac')    ? 'Mac'    : 'その他';
   const syncData = {
     appVersion: APP_VERSION,
-    savedAt:    now,
+    updatedAt:  now,
+    deviceName,
     companies:  appData.companies,
     sites:      appData.sites,
     settings:   appData.settings,
-    lastSyncAt: now,
   };
 
   try {
@@ -3192,7 +3433,8 @@ async function syncSaveToDrive() {
         result = await uploadOrUpdateJsonFile(folderId, null, 'manager_data.json', syncData);
       } else { throw err; }
     }
-    saveSyncMeta({ ...getSyncMeta(), fileId: result.id, folderId, lastSyncAt: now });
+    saveSyncMeta({ ...getSyncMeta(), fileId: result.id, folderId,
+      lastSyncAt: now, lastSaveToDriveAt: now, syncError: false });
     updateSyncStatus();
     showToast('Driveへ同期保存しました ✓', 'success');
   } catch(err) {
@@ -3202,7 +3444,8 @@ async function syncSaveToDrive() {
       pendingAction = syncSaveToDrive;
       login();
     } else {
-      showToast(`Drive API同期に失敗しました。JSONバックアップを使用してください。（${err.message}）`, 'danger');
+      saveSyncMeta({ ...getSyncMeta(), syncError: true });
+      showToast(`Drive同期に失敗しました。端末内には保存されています。あとで同期してください。（${err.message}）`, 'warning');
       updateSyncStatus();
     }
   } finally {
@@ -3213,13 +3456,13 @@ async function syncSaveToDrive() {
   }
 }
 
-// ===== Driveから同期読み込み =====
+// ===== Driveから同期読み込み（手動）=====
 function syncLoadFromDrive() {
   showConfirm(
     'Driveから読み込みますか？',
     'Drive上の管理データでこの端末のデータを上書きします。読み込み前に現在のデータを自動バックアップします。',
     () => {
-      _autoBackupBeforeSync(); // ユーザー操作のコールスタック内でダウンロード実行
+      _autoBackupBeforeSync();
       ensureAuth(_doSyncLoad);
     },
     '読み込む'
@@ -3279,18 +3522,7 @@ async function _doSyncLoad() {
     }
     if (!data.companies || !data.sites) throw new Error('同期データの形式が不正です');
 
-    const now = new Date().toISOString();
-    appData = {
-      companies: data.companies || [],
-      sites:     data.sites     || [],
-      settings:  data.settings  || appData.settings || { clientId: '', rootFolderId: '' },
-    };
-    saveData();
-    saveSyncMeta({ ...getSyncMeta(), lastSyncAt: now });
-
-    showToast('Driveからデータを読み込みました ✓', 'success');
-    updateSyncStatus();
-    navigateTo('home');
+    _applyDriveData(data);
   } catch(err) {
     console.error('Sync load error:', err);
     if (err.message === 'TOKEN_EXPIRED') {
@@ -3298,7 +3530,7 @@ async function _doSyncLoad() {
       pendingAction = _doSyncLoad;
       login();
     } else {
-      showToast(`Drive API同期に失敗しました。JSONバックアップを使用してください。（${err.message}）`, 'danger');
+      showToast(`Drive同期に失敗しました。JSONバックアップを使用してください。（${err.message}）`, 'danger');
       updateSyncStatus();
     }
   } finally {
