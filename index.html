@@ -1184,13 +1184,14 @@ function getStatusBadge(status) {
 }
 
 function calcFinancials(site) {
-  const included = getSiteTaxIncluded(site);
-  const excluded = getSiteTaxExcluded(site);
-  const taxAmt   = included - excluded;
-  const cost     = parseInt(site.cost) || 0;
-  const profit   = included - cost;
-  const margin   = included > 0 ? (profit / included * 100).toFixed(1) : '0.0';
-  return { estimate: included, included, excluded, taxAmt, cost, profit, margin };
+  const included  = getSiteTaxIncluded(site);
+  const excluded  = getSiteTaxExcluded(site);
+  const taxAmt    = included - excluded;
+  const cost      = parseInt(site.cost) || 0;
+  const profit    = excluded - cost;                                         // 税抜ベース粗利
+  const profitInc = included - cost;                                         // 税込差額（参考）
+  const margin    = excluded > 0 ? (profit / excluded * 100).toFixed(1) : '0.0';
+  return { estimate: included, included, excluded, taxAmt, cost, profit, profitInc, margin };
 }
 
 // ====================================================================
@@ -1777,13 +1778,17 @@ function renderSiteDetail() {
           <div class="amount-row"><span class="amount-label">消費税（${site.taxRate ?? 10}%）</span><span class="amount-value">${formatYen(fin.taxAmt)}</span></div>
           <div class="amount-row"><span class="amount-label">原価</span><span class="amount-value">${formatYen(fin.cost)}</span></div>
           <div class="amount-row">
-            <span class="amount-label">粗利（税込ベース）</span>
+            <span class="amount-label">粗利（税抜ベース）</span>
             <span class="amount-value ${fin.profit >= 0 ? 'amount-positive' : 'amount-negative'}">${formatYen(fin.profit)}</span>
           </div>
           <div class="amount-row">
             <span class="amount-label">粗利率</span>
             <span class="amount-value ${fin.profit >= 0 ? 'amount-positive' : 'amount-negative'}">${fin.margin}%</span>
           </div>
+          ${fin.cost > 0 ? `<div class="amount-row" style="opacity:0.55;">
+            <span class="amount-label" style="font-size:11px;">参考：税込差額</span>
+            <span class="amount-value" style="font-size:12px;">${formatYen(fin.profitInc)}</span>
+          </div>` : ''}
           ${site.estimateType ? `
           <div class="amount-row"><span class="amount-label">見積種別</span><span class="amount-value">${esc(site.estimateType)}</span></div>` : ''}
           ${site.estimateDate ? `
@@ -2802,12 +2807,16 @@ function executeImport(items) {
       site.taxRate   = taxRate;
     }
 
-    // 原価・粗利（cost 優先、なければ netProfit から逆算）
+    // 原価（cost 優先、totalCost → materialCost → netProfit から逆算）
     if (data.cost != null) {
       site.cost = parseInt(data.cost) || 0;
-    } else if (data.netProfit != null && taxIncluded !== null) {
-      // netProfit = 税込 − 原価 として扱い原価を逆算
-      site.cost = Math.max(0, taxIncluded - (parseInt(data.netProfit) || 0));
+    } else if (data.totalCost != null) {
+      site.cost = parseInt(data.totalCost) || 0;
+    } else if (data.materialCost != null) {
+      site.cost = parseInt(data.materialCost) || 0;
+    } else if (data.netProfit != null && taxExcluded !== null) {
+      // netProfit = 税抜売上 − 原価 として原価を逆算
+      site.cost = Math.max(0, taxExcluded - (parseInt(data.netProfit) || 0));
     }
     if (data.estimateType) site.estimateType = data.estimateType;
     if (data.estimateDate) site.estimateDate = data.estimateDate;
