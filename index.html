@@ -1600,19 +1600,46 @@ function renderStatusSummary() {
   if (!appData.sites.length) { el.innerHTML = ''; return; }
 
   let grandTotal = 0, grandCount = 0;
+  const counts = {}, totals = {};
+  for (const { key } of STATUS_ROWS) {
+    const grp    = appData.sites.filter(s => s.status === key);
+    counts[key]  = grp.length;
+    totals[key]  = grp.reduce((a, s) => a + _getSiteAmountForSummary(s), 0);
+    grandTotal  += totals[key];
+    grandCount  += grp.length;
+  }
+
+  // 受注率（件数ベース）: (受注+施工中+完了) ÷ (全体 − 除外なし)
+  const wonCount      = (counts['受注'] || 0) + (counts['施工中'] || 0) + (counts['完了'] || 0);
+  const decidedCount  = wonCount + (counts['失注'] || 0); // 結果が出た件数
+  const rateByCount   = decidedCount > 0 ? Math.round(wonCount / decidedCount * 10) / 10 : null;
+
+  // 受注率（金額ベース）: (受注+施工中+完了) ÷ 全合計
+  const wonTotal    = (totals['受注'] || 0) + (totals['施工中'] || 0) + (totals['完了'] || 0);
+  const rateByAmt   = grandTotal > 0 ? Math.round(wonTotal / grandTotal * 10) / 10 : null;
 
   const rows = STATUS_ROWS.map(({ key, bg, border, color }) => {
-    const grp   = appData.sites.filter(s => s.status === key);
-    const total = grp.reduce((a, s) => a + _getSiteAmountForSummary(s), 0);
-    grandTotal += total;
-    grandCount += grp.length;
-    if (!grp.length) return '';
+    if (!counts[key]) return '';
     return `<tr>
       <td><span class="badge" style="background:${bg};color:${color};border:1px solid ${border};font-size:11px;padding:2px 8px;">${key}</span></td>
-      <td class="ss-cnt">${grp.length}件</td>
-      <td class="ss-amt" style="color:${color};">${formatYen(total)}</td>
+      <td class="ss-cnt">${counts[key]}件</td>
+      <td class="ss-amt" style="color:${color};">${formatYen(totals[key])}</td>
     </tr>`;
   }).join('');
+
+  const rateHtml = (rateByCount !== null || rateByAmt !== null) ? `
+    <div style="display:flex;gap:16px;flex-wrap:wrap;padding:10px 12px;background:#f0fdf4;border-top:1.5px solid #bbf7d0;border-radius:0 0 var(--radius) var(--radius);">
+      <div style="display:flex;align-items:baseline;gap:6px;">
+        <span style="font-size:12px;color:var(--text-muted);">受注率（決着件数ベース）</span>
+        <span style="font-size:20px;font-weight:700;color:#15803d;">${rateByCount !== null ? rateByCount + '%' : '—'}</span>
+        <span style="font-size:11px;color:var(--text-muted);">${wonCount}件 / ${decidedCount}件</span>
+      </div>
+      <div style="display:flex;align-items:baseline;gap:6px;">
+        <span style="font-size:12px;color:var(--text-muted);">受注率（金額ベース）</span>
+        <span style="font-size:20px;font-weight:700;color:#15803d;">${rateByAmt !== null ? rateByAmt + '%' : '—'}</span>
+        <span style="font-size:11px;color:var(--text-muted);">${formatYen(wonTotal)} / ${formatYen(grandTotal)}</span>
+      </div>
+    </div>` : '';
 
   el.innerHTML = `
     <div class="card" style="margin-bottom:12px;">
@@ -1631,6 +1658,7 @@ function renderStatusSummary() {
           </tbody>
         </table>
       </div>
+      ${rateHtml}
     </div>`;
 }
 
