@@ -972,18 +972,18 @@
 </div>
 
 <!-- Handoff Manual Import Modal -->
-<!-- Duplicate Site Confirm Modal -->
+<!-- Estimate Duplicate Confirm Modal -->
 <div class="modal-overlay" id="modal-duplicate-confirm">
   <div class="modal">
     <div class="modal-handle"></div>
     <div class="modal-header">
-      <h3 class="modal-title">同じ案件が登録済みです</h3>
+      <h3 class="modal-title">同じ見積データがあります</h3>
       <button class="modal-close" onclick="closeModal('modal-duplicate-confirm')">✕</button>
     </div>
     <div id="dup-info" style="font-size:13px;color:var(--text-muted);line-height:1.7;margin-bottom:16px;"></div>
     <div style="display:flex;flex-direction:column;gap:10px;">
-      <button class="btn btn-primary" onclick="_dupChooseOverwrite()">既存案件を上書き</button>
-      <button class="btn btn-secondary" onclick="_dupChooseNew()">別案件として新規登録</button>
+      <button class="btn btn-primary" onclick="_dupChooseAdd()">この現場に追加保存</button>
+      <button class="btn btn-secondary" onclick="_dupChooseOverwrite()">既存見積データを上書き</button>
       <button class="btn btn-secondary" onclick="closeModal('modal-duplicate-confirm')">キャンセル</button>
     </div>
   </div>
@@ -1695,13 +1695,27 @@ function renderSites() {
   listEl.innerHTML = sites.map(s => {
     const company = appData.companies.find(c => c.id === s.companyId);
     const fin = calcFinancials(s);
+    const estimates = s.estimates || [];
+    const latestEst = estimates.length ? estimates[estimates.length - 1] : null;
+    const pdfCount  = (s.pdfs || []).length;
+    // Build sub-line
+    const subParts = [esc(company?.name || '会社未設定')];
+    if (latestEst) {
+      if (latestEst.netAmountInTax) subParts.push(`NET税込 ${formatYen(latestEst.netAmountInTax)}`);
+      else if (fin.estimate > 0)    subParts.push(formatYen(fin.estimate));
+    } else if (fin.estimate > 0) {
+      subParts.push(formatYen(fin.estimate));
+    }
+    const badges = [];
+    if (estimates.length) badges.push(`<span style="display:inline-block;font-size:10px;font-weight:700;background:#e0f2fe;color:#0369a1;border-radius:4px;padding:1px 6px;margin-right:4px;">見積JSON ${estimates.length}件</span>`);
+    if (pdfCount)         badges.push(`<span style="display:inline-block;font-size:10px;font-weight:700;background:#fef2f2;color:#dc2626;border-radius:4px;padding:1px 6px;margin-right:4px;">PDF ${pdfCount}件</span>`);
     return `<div class="list-item" onclick="navigateTo('site-detail','${s.id}')">
       <div class="list-item-icon icon-site">📋</div>
       <div class="list-item-body">
         <div class="list-item-title">${esc(s.name)}</div>
-        <div class="list-item-sub">${esc(company?.name || '会社未設定')}${fin.estimate > 0 ? '・' + formatYen(fin.estimate) : ''}</div>
+        <div class="list-item-sub" style="white-space:normal;">${subParts.join('・')}${badges.length ? '<br>' + badges.join('') : ''}</div>
       </div>
-      <div class="list-item-right">
+      <div class="list-item-right" style="align-items:flex-start;padding-top:4px;">
         ${getStatusBadge(s.status)}
         <svg class="chevron" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>
       </div>
@@ -1839,6 +1853,18 @@ function renderSiteDetail() {
       <div class="card-header"><span class="card-title">住所</span></div>
       <div class="card-body" style="padding-top:0;font-size:14px;">${esc(site.address)}</div>
     </div>` : ''}
+
+    <!-- 見積JSON一覧 -->
+    <div class="card detail-section">
+      <div class="card-header" style="background:#eff6ff;border-bottom:1.5px solid #bfdbfe;">
+        <span class="card-title" style="color:#1d4ed8;">📊 見積JSON</span>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <span class="badge" style="background:#bfdbfe;color:#1d4ed8;">${(site.estimates||[]).length}件</span>
+          <button class="btn btn-outline btn-sm" style="font-size:11px;padding:4px 8px;" onclick="openHandoffImportModal()">＋ JSON取込</button>
+        </div>
+      </div>
+      <div id="estimates-list">${_renderEstimatesList(site)}</div>
+    </div>
 
     <!-- 積算ツールから受け取った未アップロードPDF -->
     ${(site.pendingPdfs || []).length > 0 ? `
@@ -2748,13 +2774,85 @@ function confirmHandoffFill() {
 }
 
 // 実際の取り込み処理（バリデーション済み items を受け取る）
-// modeMap: { "会社名|現場名": 'overwrite'|'new' } – 重複時の処理指示
-function executeImport(items, modeMap) {
-  modeMap = modeMap || {};
+// ── Estimate list renderer ────────────────────────────────────────────────
+function _renderEstimatesList(site) {
+  const estimates = site.estimates || [];
+  if (!estimates.length) {
+    return '<div style="padding:14px 16px;text-align:center;font-size:13px;color:var(--text-muted);">見積JSONがありません。「＋ JSON取込」から積算データを追加できます。</div>';
+  }
+  return estimates.map((est, idx) => {
+    const profit    = (est.grossProfit != null) ? est.grossProfit : (est.netAmountExTax || 0) - (est.materialCostTotal || est.internalTotal || 0);
+    const profitRate = est.grossProfitRate != null ? est.grossProfitRate : (est.netAmountExTax > 0 ? Math.round(profit / est.netAmountExTax * 1000) / 10 : 0);
+    const dateStr   = est.createdAt ? est.createdAt.slice(0, 10) : formatDate(est.importedAt);
+    return `
+    <div style="padding:12px 16px;border-bottom:1px solid var(--border);">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+        <div>
+          <span style="font-size:12px;font-weight:700;background:#e0f2fe;color:#0369a1;border-radius:4px;padding:2px 7px;">${esc(est.type || '種別未設定')}</span>
+          ${dateStr ? `<span style="font-size:12px;color:var(--text-muted);margin-left:8px;">${dateStr}</span>` : ''}
+        </div>
+        <button class="btn btn-sm" onclick="confirmDeleteEstimate('${site.id}',${idx})"
+          style="background:#fee2e2;color:#dc2626;border:1.5px solid #fecaca;padding:3px 8px;font-size:11px;">削除</button>
+      </div>
+      <div class="amount-table" style="margin:0;">
+        ${est.netAmountExTax   != null ? `<div class="amount-row" style="padding:3px 0;"><span class="amount-label" style="font-size:12px;">NET税抜</span><span class="amount-value" style="font-size:13px;">${formatYen(est.netAmountExTax)}</span></div>` : ''}
+        ${est.netAmountInTax   != null ? `<div class="amount-row" style="padding:3px 0;"><span class="amount-label" style="font-size:12px;">NET税込</span><span class="amount-value" style="font-size:13px;font-weight:700;">${formatYen(est.netAmountInTax)}</span></div>` : ''}
+        ${est.estimateAmount   != null ? `<div class="amount-row" style="padding:3px 0;"><span class="amount-label" style="font-size:12px;">見積金額</span><span class="amount-value" style="font-size:13px;">${formatYen(est.estimateAmount)}</span></div>` : ''}
+        ${est.internalTotal    != null ? `<div class="amount-row" style="padding:3px 0;"><span class="amount-label" style="font-size:12px;">社内計算合計</span><span class="amount-value" style="font-size:12px;">${formatYen(est.internalTotal)}</span></div>` : ''}
+        ${est.materialCostTotal!= null ? `<div class="amount-row" style="padding:3px 0;"><span class="amount-label" style="font-size:12px;">材料原価合計</span><span class="amount-value" style="font-size:12px;">${formatYen(est.materialCostTotal)}</span></div>` : ''}
+        <div class="amount-row" style="padding:3px 0;">
+          <span class="amount-label" style="font-size:12px;">粗利</span>
+          <span class="amount-value ${profit >= 0 ? 'amount-positive' : 'amount-negative'}" style="font-size:13px;">${formatYen(profit)}</span>
+        </div>
+        <div class="amount-row" style="padding:3px 0;">
+          <span class="amount-label" style="font-size:12px;">粗利率</span>
+          <span class="amount-value ${profit >= 0 ? 'amount-positive' : 'amount-negative'}" style="font-size:13px;">${profitRate}%</span>
+        </div>
+        ${(est.items||[]).length > 0 ? `<div class="amount-row" style="padding:3px 0;"><span class="amount-label" style="font-size:12px;">明細</span><span class="amount-value" style="font-size:12px;color:var(--text-muted);">${est.items.length}件</span></div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function confirmDeleteEstimate(siteId, idx) {
+  showConfirm('見積データを削除しますか？', 'この操作は取り消せません。', () => {
+    const site = appData.sites.find(s => s.id === siteId);
+    if (!site || !site.estimates) return;
+    site.estimates.splice(idx, 1);
+    // 主要フィールドを最新見積から再同期
+    _syncPrimaryFieldsFromEstimates(site);
+    site.updatedAt = new Date().toISOString();
+    saveData();
+    renderSiteDetail();
+    showToast('見積データを削除しました');
+  }, '削除');
+}
+
+// 主要フィールドを site.estimates[] の最新レコードから同期（summaryなど互換用）
+function _syncPrimaryFieldsFromEstimates(site) {
+  if (!site.estimates || !site.estimates.length) return;
+  const est = site.estimates[site.estimates.length - 1];
+  const taxRate = 10;
+  const netInTax  = parseInt(est.netAmountInTax) || 0;
+  const netExTax  = parseInt(est.netAmountExTax) || (netInTax > 0 ? Math.round(netInTax / 1.1) : 0);
+  const estAmt    = parseInt(est.estimateAmount) || netInTax;
+  const costVal   = parseInt(est.materialCostTotal) || parseInt(est.internalTotal) || 0;
+  site.estimateAmount            = estAmt;
+  site.estimateAmountTaxIncluded = netInTax || estAmt;
+  site.estimateAmountTaxExcluded = netExTax;
+  site.taxAmount                 = (netInTax || estAmt) - netExTax;
+  site.taxRate                   = taxRate;
+  site.cost                      = costVal;
+  if (est.type)      site.estimateType = est.type;
+  if (est.createdAt) site.estimateDate = est.createdAt.slice(0, 10);
+}
+
+// ── Import execution ──────────────────────────────────────────────────────
+// estModeMap: { "会社名|現場名": 'add'|'overwrite' } – 見積重複時の処理
+function executeImport(items, estModeMap) {
+  estModeMap = estModeMap || {};
   const now = new Date().toISOString();
-  let newCount    = 0;
-  let updateCount = 0;
-  let lastSite    = null;
+  let lastSite = null;
 
   for (const data of items) {
     const companyName = (data.companyName || '').trim();
@@ -2768,115 +2866,74 @@ function executeImport(items, modeMap) {
       appData.companies.push(company);
     }
 
-    // 重複モード決定
-    const dupKey  = companyName + '|' + siteName;
-    const dupMode = modeMap[dupKey] || 'auto'; // 'overwrite'|'new'|'auto'
-
-    // 現場を検索
-    let existing = appData.sites.find(s => s.companyId === company.id && s.name.trim() === siteName);
-    let site;
-
-    if (!existing || dupMode === 'new') {
-      // 新規作成
+    // 現場を検索（常に既存を優先、なければ新規作成）
+    let site = appData.sites.find(s => s.companyId === company.id && s.name.trim() === siteName);
+    if (!site) {
       site = {
-        id: generateId(),
-        companyId: company.id,
-        name: siteName,
-        status: '見積中',
-        estimateAmount: 0,
-        cost: 0,
-        estimateType: '',
-        address: '',
-        notes: '',
-        pdfs: [],
-        pendingPdfs: [],
-        driveFolderId: '',
-        driveFolderLink: '',
-        createdAt: now,
-        updatedAt: now,
+        id: generateId(), companyId: company.id, name: siteName,
+        status: '見積中', estimateAmount: 0, cost: 0, estimateType: '',
+        address: '', notes: '', pdfs: [], pendingPdfs: [], estimates: [],
+        driveFolderId: '', driveFolderLink: '', createdAt: now, updatedAt: now,
       };
       appData.sites.push(site);
-      newCount++;
+    }
+    if (!site.estimates)   site.estimates   = [];
+    if (!site.pendingPdfs) site.pendingPdfs = [];
+
+    // ── 見積レコードを構築
+    const estRecord = {
+      id:               generateId(),
+      type:             data.estimateType || '',
+      netAmountExTax:   data.estimateAmountTaxExcluded != null ? parseInt(data.estimateAmountTaxExcluded) : null,
+      netAmountInTax:   data.estimateAmountTaxIncluded != null ? parseInt(data.estimateAmountTaxIncluded) : null,
+      estimateAmount:   data.estimateAmount  != null ? parseInt(data.estimateAmount)  : null,
+      internalTotal:    data.totalCost       != null ? parseInt(data.totalCost)        : null,
+      materialCostTotal:data.materialCost    != null ? parseInt(data.materialCost)     : null,
+      grossProfit:      data.netProfit       != null ? parseInt(data.netProfit)        : null,
+      grossProfitRate:  null,
+      createdAt:        data.estimateDate || now.slice(0, 10),
+      importedAt:       now,
+      items:            data.items || [],
+    };
+    // 粗利率を計算
+    if (estRecord.grossProfit != null && estRecord.netAmountExTax) {
+      estRecord.grossProfitRate = Math.round(estRecord.grossProfit / estRecord.netAmountExTax * 1000) / 10;
+    }
+
+    // ── 見積重複チェック（同じ現場内に同じtype+dateが既にあるか）
+    const dupKey   = companyName + '|' + siteName;
+    const estMode  = estModeMap[dupKey] || 'add';
+    const existing = site.estimates.find(e => e.type === estRecord.type && e.createdAt === estRecord.createdAt);
+    if (existing && estMode === 'overwrite') {
+      Object.assign(existing, estRecord, { id: existing.id });
     } else {
-      // 上書き（既存）
-      site = existing;
-      if (!site.pendingPdfs) site.pendingPdfs = [];
-      updateCount++;
+      site.estimates.push(estRecord);
     }
 
-    // ── 見積金額（優先順: 税込+税抜セット → 税込のみ → 税抜のみ → estimateAmount）
-    const taxRate = parseInt(data.taxRate) || site.taxRate || 10;
-    let taxIncluded = null, taxExcluded = null, taxAmt = null;
+    // 主要フィールドを最新見積から同期（月別集計・summary互換）
+    _syncPrimaryFieldsFromEstimates(site);
 
-    if (data.estimateAmountTaxIncluded != null && data.estimateAmountTaxExcluded != null) {
-      taxIncluded = parseInt(data.estimateAmountTaxIncluded) || 0;
-      taxExcluded = parseInt(data.estimateAmountTaxExcluded) || 0;
-      taxAmt      = taxIncluded - taxExcluded;
-    } else if (data.estimateAmountTaxIncluded != null) {
-      taxIncluded = parseInt(data.estimateAmountTaxIncluded) || 0;
-      const tf    = calcTaxFields(taxIncluded, taxRate);
-      taxExcluded = tf.excluded; taxAmt = tf.taxAmt;
-    } else if (data.estimateAmountTaxExcluded != null) {
-      taxExcluded = parseInt(data.estimateAmountTaxExcluded) || 0;
-      taxIncluded = Math.round(taxExcluded * (1 + taxRate / 100));
-      taxAmt      = taxIncluded - taxExcluded;
-    } else if (data.estimateAmount != null) {
-      const tf    = calcTaxFields(parseInt(data.estimateAmount) || 0, taxRate);
-      taxIncluded = tf.included; taxExcluded = tf.excluded; taxAmt = tf.taxAmt;
-    }
-
-    if (taxIncluded !== null) {
-      site.estimateAmount            = taxIncluded;
-      site.estimateAmountTaxIncluded = taxIncluded;
-      site.estimateAmountTaxExcluded = taxExcluded;
-      site.taxAmount = taxAmt;
-      site.taxRate   = taxRate;
-    }
-
-    // ── 原価（cost → totalCost → materialCost → netProfit から逆算）
-    if (data.cost != null) {
-      site.cost = parseInt(data.cost) || 0;
-    } else if (data.totalCost != null) {
-      site.cost = parseInt(data.totalCost) || 0;
-    } else if (data.materialCost != null) {
-      site.cost = parseInt(data.materialCost) || 0;
-    } else if (data.netProfit != null && taxExcluded !== null) {
-      site.cost = Math.max(0, taxExcluded - (parseInt(data.netProfit) || 0));
-    }
-
-    if (data.estimateType) site.estimateType = data.estimateType;
-    if (data.estimateDate) site.estimateDate = data.estimateDate;
-    if (data.notes)        site.notes        = data.notes;
-
-    // 明細データを保存
-    if (data.items && data.items.length > 0) {
-      site.importedItems = data.items;
-    }
-
-    site.updatedAt = now;
-
-    // PDFファイル名を pendingPdfs に登録（本体なし・重複チェックあり）
+    if (data.notes) site.notes = data.notes;
     if (data.pdfFileName) {
       if (!site.pendingPdfs.find(p => p.name === data.pdfFileName)) {
         site.pendingPdfs.push({ name: data.pdfFileName, receivedAt: now });
       }
     }
-
+    site.updatedAt = now;
     lastSite = { id: site.id, companyName, siteName };
   }
 
   saveData();
   localStorage.removeItem(HANDOFF_KEY);
 
-  const validCount = items.filter(d => (d.companyName || '').trim() && (d.siteName || '').trim()).length;
+  const validCount = items.filter(d => (d.companyName||'').trim() && (d.siteName||'').trim()).length;
   if (lastSite && validCount === 1) {
-    showToast(`${lastSite.companyName} / ${lastSite.siteName} を登録しました`, 'success');
+    showToast(`${lastSite.companyName} / ${lastSite.siteName} に見積データを保存しました`, 'success');
   } else if (lastSite) {
     showToast(`${validCount}件を取り込みました（最後: ${lastSite.companyName} / ${lastSite.siteName}）`, 'success');
   } else {
     showToast('取り込み完了', 'success');
   }
-
   if (lastSite) navigateTo('site-detail', lastSite.id);
 }
 
@@ -3669,75 +3726,61 @@ function _handleHandoffItems(items) {
   _checkDuplicatesAndImport(items);
 }
 
+// ── Estimate-level duplicate check ────────────────────────────────────────
+let _dupQueue = []; // [{item, existingSite, existingEst}]
+let _dupModeMap = {};
+
 function _checkDuplicatesAndImport(items) {
-  // Find first item that has a matching company+site already
+  // Check for items where the site exists AND has same type+date estimate
   const dups = items.map(item => {
     const company = appData.companies.find(c => c.name.trim() === item.companyName);
     if (!company) return null;
     const site = appData.sites.find(s => s.companyId === company.id && s.name.trim() === item.siteName);
-    return site ? { item, existingSite: site } : null;
+    if (!site || !site.estimates) return null;
+    const estDate = item.estimateDate || new Date().toISOString().slice(0, 10);
+    const existingEst = site.estimates.find(e => e.type === (item.estimateType || '') && e.createdAt === estDate);
+    return existingEst ? { item, site, existingEst } : null;
   }).filter(Boolean);
 
   if (!dups.length) {
-    // No duplicates – import directly
     executeImport(items, {});
     return;
   }
 
-  // Has duplicates – set up queue and show modal for first one
+  _dupQueue   = dups;
+  _dupModeMap = {};
   _dupPendingItems = items;
   _dupCurrentIdx   = 0;
-  _dupResults      = items.map(item => ({ item, mode: 'auto' })); // default: auto
-  _showNextDupModal(dups);
-}
-
-let _dupQueue = []; // [{item, existingSite}]
-
-function _showNextDupModal(dups) {
-  _dupQueue = dups;
-  _dupCurrentIdx = 0;
   _showDupModal();
 }
 
 function _showDupModal() {
   const dup = _dupQueue[_dupCurrentIdx];
   if (!dup) {
-    // All resolved — build mode map and execute
-    const modeMap = {};
-    for (const r of _dupResults) {
-      const key = r.item.companyName + '|' + r.item.siteName;
-      modeMap[key] = r.mode;
-    }
-    executeImport(_dupPendingItems, modeMap);
+    executeImport(_dupPendingItems, _dupModeMap);
     return;
   }
-  const { item, existingSite } = dup;
+  const { item, existingEst } = dup;
   const remaining = _dupQueue.length - _dupCurrentIdx;
+  const dateStr = existingEst.createdAt || '';
   document.getElementById('dup-info').innerHTML =
-    `<strong>${esc(item.companyName)} / ${esc(item.siteName)}</strong> は既に登録されています。<br>` +
-    (remaining > 1 ? `<span style="font-size:12px;color:var(--text-muted);">（残り${remaining}件）</span><br>` : '') +
-    `<br>既存案件を上書きすると、金額・原価・種別などが更新されます。<br>PDFリンクと現場名は保持されます。`;
+    `<strong>${esc(item.companyName)} / ${esc(item.siteName)}</strong> に<br>` +
+    `同じ見積データ（種別: ${esc(existingEst.type || '未設定')}、日付: ${dateStr}）<br>がすでに保存されています。` +
+    (remaining > 1 ? `<br><span style="font-size:12px;color:var(--text-muted);">（残り${remaining}件）</span>` : '');
   openModal('modal-duplicate-confirm');
 }
 
-function _dupChooseOverwrite() {
-  const dup = _dupQueue[_dupCurrentIdx];
-  if (dup) {
-    const key = dup.item.companyName + '|' + dup.item.siteName;
-    const r = _dupResults.find(r => r.item.companyName + '|' + r.item.siteName === key);
-    if (r) r.mode = 'overwrite';
-  }
+function _dupChooseAdd() {
+  // 'add' = default, no modeMap entry needed
   _dupCurrentIdx++;
   closeModal('modal-duplicate-confirm');
   _showDupModal();
 }
 
-function _dupChooseNew() {
+function _dupChooseOverwrite() {
   const dup = _dupQueue[_dupCurrentIdx];
   if (dup) {
-    const key = dup.item.companyName + '|' + dup.item.siteName;
-    const r = _dupResults.find(r => r.item.companyName + '|' + r.item.siteName === key);
-    if (r) r.mode = 'new';
+    _dupModeMap[dup.item.companyName + '|' + dup.item.siteName] = 'overwrite';
   }
   _dupCurrentIdx++;
   closeModal('modal-duplicate-confirm');
