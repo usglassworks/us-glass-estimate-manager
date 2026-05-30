@@ -534,6 +534,13 @@
     .home-sc-val { font-weight:600; font-size:12px; font-feature-settings:"tnum"; }
     .home-sc-cnt { font-size:11px; color:var(--text-muted); text-align:right; margin-top:3px; }
     .home-total-wrap { background:var(--primary-light); border:1.5px solid var(--primary); border-radius:var(--radius); padding:10px 14px; }
+    .ss-table { width:100%; border-collapse:collapse; }
+    .ss-table td { padding:7px 10px; font-size:13px; vertical-align:middle; }
+    .ss-table tr { border-bottom:1px solid var(--border); }
+    .ss-table tr:last-child { border-bottom:none; }
+    .ss-total td { font-weight:700; background:#f9fafb; font-size:13px; }
+    .ss-amt { text-align:right; font-weight:600; font-feature-settings:"tnum"; white-space:nowrap; }
+    .ss-cnt { text-align:right; font-size:12px; color:var(--text-muted); white-space:nowrap; min-width:36px; }
     .home-total-row { display:flex; justify-content:space-between; align-items:baseline; padding:4px 0; font-size:13px; }
     .home-total-lbl { color:var(--text-muted); }
     .home-total-val { font-weight:700; font-feature-settings:"tnum"; }
@@ -603,6 +610,7 @@
     <div id="home-sync-banner"></div>
     <div id="home-backup-status"></div>
     <div class="stats-grid" id="stats-grid"></div>
+    <div id="home-status-summary"></div>
     <div id="home-month-summary"></div>
     <div class="card" id="recent-sites-card">
       <div class="card-header">
@@ -1496,12 +1504,12 @@ function navigateTo(page, param) {
 function renderHome() {
   checkHandoff();
   const stats = document.getElementById('stats-grid');
-  const companies = appData.companies.length;
-  const sites = appData.sites.length;
-  const won = appData.sites.filter(s => s.status === '受注' || s.status === '施工中' || s.status === '完了').length;
-  const totalIncluded = appData.sites.reduce((a, s) => a + getSiteTaxIncluded(s), 0);
-  const totalExcluded = appData.sites.reduce((a, s) => a + getSiteTaxExcluded(s), 0);
-  const totalEst = homeTaxMode === 'included' ? totalIncluded : totalExcluded;
+  const companies  = appData.companies.length;
+  const sites      = appData.sites.length;
+  const estimating = appData.sites.filter(s => s.status === '見積中').length;
+  const active     = appData.sites.filter(s => s.status === '受注' || s.status === '施工中').length;
+  const completed  = appData.sites.filter(s => s.status === '完了').length;
+  const totalIncluded = appData.sites.reduce((a, s) => a + _getSiteAmountForSummary(s), 0);
 
   stats.innerHTML = `
     <div class="stat-card">
@@ -1513,12 +1521,12 @@ function renderHome() {
       <div class="stat-label">現場数</div>
     </div>
     <div class="stat-card">
-      <div class="stat-value">${won}</div>
-      <div class="stat-label">受注・施工・完了</div>
+      <div class="stat-value" style="font-size:20px;color:#1d4ed8;">${estimating}</div>
+      <div class="stat-label">見積中</div>
     </div>
-    <div class="stat-card" onclick="toggleHomeTaxMode()" style="cursor:pointer;">
-      <div class="stat-value" style="font-size:16px;">¥${(totalEst/10000).toLocaleString('ja-JP',{maximumFractionDigits:0})}万</div>
-      <div class="stat-label">見積合計 <span class="tax-badge ${homeTaxMode === 'excluded' ? 'excl' : ''}">${homeTaxMode === 'included' ? '税込' : '税抜'}</span></div>
+    <div class="stat-card">
+      <div class="stat-value" style="font-size:16px;">¥${(totalIncluded/10000).toLocaleString('ja-JP',{maximumFractionDigits:0})}万</div>
+      <div class="stat-label">全体合計（税込）</div>
     </div>
   `;
 
@@ -1553,9 +1561,77 @@ function renderHome() {
   }
 
   document.getElementById('home-guide-card').style.display = appData.sites.length > 0 ? 'none' : '';
+  renderStatusSummary();
   renderHomeMonthSummary();
   updateBackupStatus();
   renderHomeSyncBanner();
+}
+
+// ====================================================================
+// ホーム：ステータス別全体集計
+// ====================================================================
+
+// 金額優先順位: 税込見積 > NET税込 > NET税抜×1.1 > 0
+function _getSiteAmountForSummary(site) {
+  const primary = getSiteTaxIncluded(site);
+  if (primary > 0) return primary;
+  // estimates[] をフォールバック確認
+  const ests = site.estimates || [];
+  for (let i = ests.length - 1; i >= 0; i--) {
+    const e = ests[i];
+    if (e.netAmountInTax  > 0) return e.netAmountInTax;
+    if (e.netAmountExTax  > 0) return Math.round(e.netAmountExTax * 1.1);
+    if (e.estimateAmount  > 0) return e.estimateAmount;
+  }
+  return 0;
+}
+
+const STATUS_ROWS = [
+  { key: '見積中', bg: '#eff6ff', border: '#bfdbfe', color: '#1d4ed8' },
+  { key: '受注',   bg: '#f0fdf4', border: '#bbf7d0', color: '#15803d' },
+  { key: '施工中', bg: '#fffbeb', border: '#fde68a', color: '#a16207' },
+  { key: '完了',   bg: '#f9fafb', border: '#e5e7eb', color: '#374151' },
+  { key: '失注',   bg: '#fff1f2', border: '#fecdd3', color: '#b91c1c' },
+];
+
+function renderStatusSummary() {
+  const el = document.getElementById('home-status-summary');
+  if (!el) return;
+  if (!appData.sites.length) { el.innerHTML = ''; return; }
+
+  let grandTotal = 0, grandCount = 0;
+
+  const rows = STATUS_ROWS.map(({ key, bg, border, color }) => {
+    const grp   = appData.sites.filter(s => s.status === key);
+    const total = grp.reduce((a, s) => a + _getSiteAmountForSummary(s), 0);
+    grandTotal += total;
+    grandCount += grp.length;
+    if (!grp.length) return '';
+    return `<tr>
+      <td><span class="badge" style="background:${bg};color:${color};border:1px solid ${border};font-size:11px;padding:2px 8px;">${key}</span></td>
+      <td class="ss-cnt">${grp.length}件</td>
+      <td class="ss-amt" style="color:${color};">${formatYen(total)}</td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="card" style="margin-bottom:12px;">
+      <div class="card-header">
+        <span class="card-title">見積状況サマリー</span>
+        <span style="font-size:12px;color:var(--text-muted);">全体・全期間</span>
+      </div>
+      <div style="padding:4px 0 0;">
+        <table class="ss-table">
+          <tbody>${rows}
+            <tr class="ss-total">
+              <td>合計</td>
+              <td class="ss-cnt">${grandCount}件</td>
+              <td class="ss-amt" style="color:var(--primary);">${formatYen(grandTotal)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>`;
 }
 
 // ====================================================================
