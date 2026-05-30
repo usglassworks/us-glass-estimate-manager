@@ -596,7 +596,7 @@
     <div style="text-align:right;margin-bottom:2px;">
       <button class="btn btn-outline btn-sm" onclick="openHandoffImportModal()" style="font-size:12px;padding:5px 10px;">
         <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
-        積算データを手動取り込み
+        積算JSON取込
       </button>
     </div>
     <div id="home-login-notice"></div>
@@ -645,7 +645,13 @@
   <div class="page" id="page-sites">
     <div class="section-header">
       <h2 class="section-title">現場一覧</h2>
-      <button class="btn btn-primary btn-sm" onclick="openSiteModal()">＋ 追加</button>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-outline btn-sm" onclick="openHandoffImportModal()" style="font-size:12px;">
+          <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+          JSON取込
+        </button>
+        <button class="btn btn-primary btn-sm" onclick="openSiteModal()">＋ 追加</button>
+      </div>
     </div>
     <div class="filter-bar" id="company-filter-bar"></div>
     <div class="card" id="sites-list"></div>
@@ -966,15 +972,33 @@
 </div>
 
 <!-- Handoff Manual Import Modal -->
+<!-- Duplicate Site Confirm Modal -->
+<div class="modal-overlay" id="modal-duplicate-confirm">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <h3 class="modal-title">同じ案件が登録済みです</h3>
+      <button class="modal-close" onclick="closeModal('modal-duplicate-confirm')">✕</button>
+    </div>
+    <div id="dup-info" style="font-size:13px;color:var(--text-muted);line-height:1.7;margin-bottom:16px;"></div>
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <button class="btn btn-primary" onclick="_dupChooseOverwrite()">既存案件を上書き</button>
+      <button class="btn btn-secondary" onclick="_dupChooseNew()">別案件として新規登録</button>
+      <button class="btn btn-secondary" onclick="closeModal('modal-duplicate-confirm')">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<!-- Handoff Manual Import Modal -->
 <div class="modal-overlay" id="modal-handoff-import">
   <div class="modal">
     <div class="modal-handle"></div>
     <div class="modal-header">
-      <h3 class="modal-title">積算データを手動取り込み</h3>
+      <h3 class="modal-title">積算JSON取込</h3>
       <button class="modal-close" onclick="closeModal('modal-handoff-import')">✕</button>
     </div>
     <p style="font-size:13px;color:var(--text-muted);line-height:1.6;margin-bottom:14px;">
-      Safari・PWAで自動連携が動作しない場合はこちらから取り込みできます。
+      積算ツールの「現場管理へ送信」からコピー・ダウンロードしたJSONを読み込みます。
     </p>
     <!-- Tab -->
     <div style="display:flex;border:1.5px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px;">
@@ -991,7 +1015,7 @@
     <div id="hi-paste-area">
       <p style="font-size:13px;color:var(--text-muted);margin-bottom:8px;">積算ツールでコピーしたJSONを貼り付けてください。</p>
       <textarea id="hi-json-text" class="form-textarea" rows="6"
-        placeholder='{"companyName":"山田建設","siteName":"〇〇現場","estimateAmountTaxIncluded":363000,...}'
+        placeholder='{"companyName":"山田建設","siteName":"〇〇現場","type":"元請け用見積書","netAmountExTax":38182,"netAmountInTax":42000,...}'
         style="font-size:12px;font-family:monospace;"></textarea>
       <div id="hi-paste-error" style="display:none;" class="pdf-upload-error"></div>
       <div class="modal-actions">
@@ -2639,7 +2663,7 @@ function importHandoff() {
   try {
     const parsed = JSON.parse(raw);
     const all    = Array.isArray(parsed) ? parsed : [parsed];
-    items        = all.filter(d => d.processed !== true);
+    items        = all.filter(d => d.processed !== true).map(_normalizeImportItem);
   } catch {
     localStorage.removeItem(HANDOFF_KEY);
     showToast('データの読み込みに失敗しました', 'danger');
@@ -2724,29 +2748,36 @@ function confirmHandoffFill() {
 }
 
 // 実際の取り込み処理（バリデーション済み items を受け取る）
-function executeImport(items) {
+// modeMap: { "会社名|現場名": 'overwrite'|'new' } – 重複時の処理指示
+function executeImport(items, modeMap) {
+  modeMap = modeMap || {};
   const now = new Date().toISOString();
   let newCount    = 0;
   let updateCount = 0;
-  let lastSite    = null; // { id, companyName, siteName }
+  let lastSite    = null;
 
   for (const data of items) {
     const companyName = (data.companyName || '').trim();
     const siteName    = (data.siteName    || '').trim();
-    if (!companyName || !siteName) continue; // 念のため空は安全スキップ
+    if (!companyName || !siteName) continue;
 
-    // 会社を検索：①完全一致 → ②両端空白を除去して再比較 → ③新規作成
-    let company = appData.companies.find(c => c.name === companyName)
-               || appData.companies.find(c => c.name.trim() === companyName);
+    // 会社を検索・なければ作成
+    let company = appData.companies.find(c => c.name.trim() === companyName);
     if (!company) {
       company = { id: generateId(), name: companyName, createdAt: now };
       appData.companies.push(company);
     }
 
-    // 現場を検索：①完全一致 → ②両端空白を除去して再比較 → ③新規作成
-    let site = appData.sites.find(s => s.companyId === company.id && s.name === siteName)
-            || appData.sites.find(s => s.companyId === company.id && s.name.trim() === siteName);
-    if (!site) {
+    // 重複モード決定
+    const dupKey  = companyName + '|' + siteName;
+    const dupMode = modeMap[dupKey] || 'auto'; // 'overwrite'|'new'|'auto'
+
+    // 現場を検索
+    let existing = appData.sites.find(s => s.companyId === company.id && s.name.trim() === siteName);
+    let site;
+
+    if (!existing || dupMode === 'new') {
+      // 新規作成
       site = {
         id: generateId(),
         companyId: company.id,
@@ -2767,36 +2798,31 @@ function executeImport(items) {
       appData.sites.push(site);
       newCount++;
     } else {
+      // 上書き（既存）
+      site = existing;
       if (!site.pendingPdfs) site.pendingPdfs = [];
       updateCount++;
     }
 
-    // ── 見積金額の取り込み（優先順: 税込+税抜セット → 税込のみ → 税抜のみ → estimateAmount）
+    // ── 見積金額（優先順: 税込+税抜セット → 税込のみ → 税抜のみ → estimateAmount）
     const taxRate = parseInt(data.taxRate) || site.taxRate || 10;
     let taxIncluded = null, taxExcluded = null, taxAmt = null;
 
     if (data.estimateAmountTaxIncluded != null && data.estimateAmountTaxExcluded != null) {
-      // 両方渡ってきた場合はそのまま使用
       taxIncluded = parseInt(data.estimateAmountTaxIncluded) || 0;
       taxExcluded = parseInt(data.estimateAmountTaxExcluded) || 0;
       taxAmt      = taxIncluded - taxExcluded;
     } else if (data.estimateAmountTaxIncluded != null) {
-      // 税込のみ → 税率から税抜を逆算
       taxIncluded = parseInt(data.estimateAmountTaxIncluded) || 0;
       const tf    = calcTaxFields(taxIncluded, taxRate);
-      taxExcluded = tf.excluded;
-      taxAmt      = tf.taxAmt;
+      taxExcluded = tf.excluded; taxAmt = tf.taxAmt;
     } else if (data.estimateAmountTaxExcluded != null) {
-      // 税抜のみ → 税率から税込を計算
       taxExcluded = parseInt(data.estimateAmountTaxExcluded) || 0;
       taxIncluded = Math.round(taxExcluded * (1 + taxRate / 100));
       taxAmt      = taxIncluded - taxExcluded;
     } else if (data.estimateAmount != null) {
-      // 旧フォーマット: estimateAmount を税込として扱い逆算
       const tf    = calcTaxFields(parseInt(data.estimateAmount) || 0, taxRate);
-      taxIncluded = tf.included;
-      taxExcluded = tf.excluded;
-      taxAmt      = tf.taxAmt;
+      taxIncluded = tf.included; taxExcluded = tf.excluded; taxAmt = tf.taxAmt;
     }
 
     if (taxIncluded !== null) {
@@ -2807,7 +2833,7 @@ function executeImport(items) {
       site.taxRate   = taxRate;
     }
 
-    // 原価（cost 優先、totalCost → materialCost → netProfit から逆算）
+    // ── 原価（cost → totalCost → materialCost → netProfit から逆算）
     if (data.cost != null) {
       site.cost = parseInt(data.cost) || 0;
     } else if (data.totalCost != null) {
@@ -2815,11 +2841,18 @@ function executeImport(items) {
     } else if (data.materialCost != null) {
       site.cost = parseInt(data.materialCost) || 0;
     } else if (data.netProfit != null && taxExcluded !== null) {
-      // netProfit = 税抜売上 − 原価 として原価を逆算
       site.cost = Math.max(0, taxExcluded - (parseInt(data.netProfit) || 0));
     }
+
     if (data.estimateType) site.estimateType = data.estimateType;
     if (data.estimateDate) site.estimateDate = data.estimateDate;
+    if (data.notes)        site.notes        = data.notes;
+
+    // 明細データを保存
+    if (data.items && data.items.length > 0) {
+      site.importedItems = data.items;
+    }
+
     site.updatedAt = now;
 
     // PDFファイル名を pendingPdfs に登録（本体なし・重複チェックあり）
@@ -2833,22 +2866,18 @@ function executeImport(items) {
   }
 
   saveData();
-  localStorage.removeItem(HANDOFF_KEY); // 取り込み完了 → キーを削除
+  localStorage.removeItem(HANDOFF_KEY);
 
-  // トースト：「〇〇会社 / 〇〇現場 に取り込みました」
   const validCount = items.filter(d => (d.companyName || '').trim() && (d.siteName || '').trim()).length;
   if (lastSite && validCount === 1) {
-    showToast(`${lastSite.companyName} / ${lastSite.siteName} に取り込みました`, 'success');
+    showToast(`${lastSite.companyName} / ${lastSite.siteName} を登録しました`, 'success');
   } else if (lastSite) {
     showToast(`${validCount}件を取り込みました（最後: ${lastSite.companyName} / ${lastSite.siteName}）`, 'success');
   } else {
     showToast('取り込み完了', 'success');
   }
 
-  // 常に現場詳細へ遷移
-  if (lastSite) {
-    navigateTo('site-detail', lastSite.id);
-  }
+  if (lastSite) navigateTo('site-detail', lastSite.id);
 }
 
 // ====================================================================
@@ -3550,10 +3579,9 @@ async function _doSyncLoad() {
   }
 }
 
-// ── Manual Handoff Import ──────────────────────────────────────────────────
+// ── Manual Handoff / Estimation JSON Import ────────────────────────────────
 
 function openHandoffImportModal() {
-  // Reset state
   document.getElementById('hi-json-text').value = '';
   const pasteErr = document.getElementById('hi-paste-error');
   if (pasteErr) { pasteErr.style.display = 'none'; pasteErr.textContent = ''; }
@@ -3561,7 +3589,6 @@ function openHandoffImportModal() {
   if (fileErr) { fileErr.style.display = 'none'; fileErr.textContent = ''; }
   const fileInput = document.getElementById('hi-file-input');
   if (fileInput) fileInput.value = '';
-  // Default to paste tab
   switchHandoffImportTab('paste');
   openModal('modal-handoff-import');
 }
@@ -3588,26 +3615,133 @@ function switchHandoffImportTab(tab) {
   }
 }
 
+// Normalize field names from estimation tool JSON to internal format
+function _normalizeImportItem(d) {
+  return {
+    companyName: (d.companyName || '').trim(),
+    siteName:    (d.siteName    || '').trim(),
+    // 見積種別: estimateType or type
+    estimateType: d.estimateType || d.type || '',
+    // 見積日: estimateDate or createdAt
+    estimateDate: d.estimateDate || (d.createdAt ? d.createdAt.slice(0, 10) : ''),
+    // 金額: 新旧両フォーマット対応
+    estimateAmountTaxIncluded: d.estimateAmountTaxIncluded ?? d.netAmountInTax ?? null,
+    estimateAmountTaxExcluded: d.estimateAmountTaxExcluded ?? d.netAmountExTax ?? null,
+    estimateAmount: d.estimateAmount ?? null,
+    taxRate: d.taxRate ?? null,
+    // 原価: cost → totalCost / internalTotal → materialCost / materialCostTotal
+    cost:         d.cost         ?? null,
+    totalCost:    d.totalCost    ?? d.internalTotal    ?? null,
+    materialCost: d.materialCost ?? d.materialCostTotal ?? null,
+    // 粗利: netProfit / grossProfit
+    netProfit: d.netProfit ?? d.grossProfit ?? null,
+    // その他
+    pdfFileName: d.pdfFileName || '',
+    notes:       d.notes  || d.memo || '',
+    // 明細データ
+    items: Array.isArray(d.items) ? d.items : [],
+    processed: d.processed ?? false,
+  };
+}
+
 function _parseHandoffText(text) {
   const trimmed = text.trim();
   if (!trimmed) throw new Error('テキストが空です');
   const parsed = JSON.parse(trimmed);
   const all = Array.isArray(parsed) ? parsed : [parsed];
-  const items = all.filter(d => d && d.processed !== true);
-  if (!items.length) throw new Error('未処理の取り込みデータがありません（processed:true のみ、または空）');
-  return items;
+  const raw = all.filter(d => d && d.processed !== true);
+  if (!raw.length) throw new Error('未処理の取り込みデータがありません（processed:true のみ、または空）');
+  return raw.map(_normalizeImportItem);
 }
+
+// ── 重複検出と確認 ──
+let _dupPendingItems    = null; // 全件
+let _dupCurrentIdx      = 0;
+let _dupResults         = [];   // { item, mode: 'overwrite'|'new'|'skip' }[]
 
 function _handleHandoffItems(items) {
   closeModal('modal-handoff-import');
-  const hasIncomplete = items.some(
-    d => !(d.companyName || '').trim() || !(d.siteName || '').trim()
-  );
+  const hasIncomplete = items.some(d => !d.companyName || !d.siteName);
   if (hasIncomplete) {
     openHandoffFillModal(items);
-  } else {
-    executeImport(items);
+    return;
   }
+  _checkDuplicatesAndImport(items);
+}
+
+function _checkDuplicatesAndImport(items) {
+  // Find first item that has a matching company+site already
+  const dups = items.map(item => {
+    const company = appData.companies.find(c => c.name.trim() === item.companyName);
+    if (!company) return null;
+    const site = appData.sites.find(s => s.companyId === company.id && s.name.trim() === item.siteName);
+    return site ? { item, existingSite: site } : null;
+  }).filter(Boolean);
+
+  if (!dups.length) {
+    // No duplicates – import directly
+    executeImport(items, {});
+    return;
+  }
+
+  // Has duplicates – set up queue and show modal for first one
+  _dupPendingItems = items;
+  _dupCurrentIdx   = 0;
+  _dupResults      = items.map(item => ({ item, mode: 'auto' })); // default: auto
+  _showNextDupModal(dups);
+}
+
+let _dupQueue = []; // [{item, existingSite}]
+
+function _showNextDupModal(dups) {
+  _dupQueue = dups;
+  _dupCurrentIdx = 0;
+  _showDupModal();
+}
+
+function _showDupModal() {
+  const dup = _dupQueue[_dupCurrentIdx];
+  if (!dup) {
+    // All resolved — build mode map and execute
+    const modeMap = {};
+    for (const r of _dupResults) {
+      const key = r.item.companyName + '|' + r.item.siteName;
+      modeMap[key] = r.mode;
+    }
+    executeImport(_dupPendingItems, modeMap);
+    return;
+  }
+  const { item, existingSite } = dup;
+  const remaining = _dupQueue.length - _dupCurrentIdx;
+  document.getElementById('dup-info').innerHTML =
+    `<strong>${esc(item.companyName)} / ${esc(item.siteName)}</strong> は既に登録されています。<br>` +
+    (remaining > 1 ? `<span style="font-size:12px;color:var(--text-muted);">（残り${remaining}件）</span><br>` : '') +
+    `<br>既存案件を上書きすると、金額・原価・種別などが更新されます。<br>PDFリンクと現場名は保持されます。`;
+  openModal('modal-duplicate-confirm');
+}
+
+function _dupChooseOverwrite() {
+  const dup = _dupQueue[_dupCurrentIdx];
+  if (dup) {
+    const key = dup.item.companyName + '|' + dup.item.siteName;
+    const r = _dupResults.find(r => r.item.companyName + '|' + r.item.siteName === key);
+    if (r) r.mode = 'overwrite';
+  }
+  _dupCurrentIdx++;
+  closeModal('modal-duplicate-confirm');
+  _showDupModal();
+}
+
+function _dupChooseNew() {
+  const dup = _dupQueue[_dupCurrentIdx];
+  if (dup) {
+    const key = dup.item.companyName + '|' + dup.item.siteName;
+    const r = _dupResults.find(r => r.item.companyName + '|' + r.item.siteName === key);
+    if (r) r.mode = 'new';
+  }
+  _dupCurrentIdx++;
+  closeModal('modal-duplicate-confirm');
+  _showDupModal();
 }
 
 function executeHandoffPaste() {
@@ -3626,7 +3760,6 @@ function executeHandoffPaste() {
 function executeHandoffFile(input) {
   const errEl = document.getElementById('hi-file-error');
   if (!input.files || !input.files[0]) return;
-  const file = input.files[0];
   const reader = new FileReader();
   reader.onload = function(e) {
     try {
@@ -3644,7 +3777,7 @@ function executeHandoffFile(input) {
     errEl.style.display = '';
     input.value = '';
   };
-  reader.readAsText(file);
+  reader.readAsText(input.files[0]);
 }
 
 // ── Default Client ID ───────────────────────────────────────────────────────
